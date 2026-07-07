@@ -9,10 +9,18 @@ export interface Station { name: string; url: string; }
 export type Stations = Record<string, Station[]>;
 
 const here = dirname(fileURLToPath(import.meta.url));
-// dist/ -> ../data at runtime (this file compiles to dist/stations.js)
-const stations: Stations = JSON.parse(
-  readFileSync(join(here, "..", "data", "stations.json"), "utf8")
-);
+// dist/ -> ../data at runtime (this file compiles to dist/stations.js).
+// If the bundled data file is missing or corrupt, start with an empty station
+// map rather than crashing at module load — every entry-point (MCP server,
+// CLI, watchdog, selfcheck) imports this, and a crash here bricks all of them.
+// Individual tool calls will then fail with clear "Unknown genre" errors, and
+// selfcheck's genre-count assertion turns the failure into a loud diagnostic.
+let stations: Stations = {};
+try {
+  stations = JSON.parse(readFileSync(join(here, "..", "data", "stations.json"), "utf8"));
+} catch (e) {
+  process.stderr.write(`pirate-radio: failed to load stations.json — ${(e as Error).message}\n`);
+}
 
 export function all(): Stations {
   return stations;

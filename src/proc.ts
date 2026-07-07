@@ -99,7 +99,18 @@ export function killPid(pid: number | null | undefined): void {
         windowsHide: true,
       });
     } else {
+      // Best-effort graceful shutdown first: mpv/ffplay respond to SIGTERM
+      // quickly. Fall through to SIGKILL after a short wait if they don't —
+      // otherwise a network-stuck player could survive the "stop" indefinitely
+      // and defeat the whole point of this call.
       process.kill(pid, "SIGTERM");
+      const deadline = Date.now() + 250;
+      while (Date.now() < deadline && pidAlive(pid)) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+      }
+      if (pidAlive(pid)) {
+        try { process.kill(pid, "SIGKILL"); } catch { /* raced with exit — fine */ }
+      }
     }
   } catch {
     /* already dead, or not ours — fine */

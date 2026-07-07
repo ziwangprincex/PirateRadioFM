@@ -16,14 +16,12 @@ import {
   writeFileSync,
   renameSync,
   mkdirSync,
-  rmSync,
-  rmdirSync,
   existsSync,
-  statSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { pidAlive, sameProcess, procStartToken } from "./proc.js";
+import { sameProcess, procStartToken } from "./proc.js";
+import { withCrossProcessLock } from "./lock.js";
 
 export interface ProcEntry {
   pid: number;
@@ -61,76 +59,15 @@ function writeRaw(r: Registry): void {
 }
 
 // --- cross-process lock ----------------------------------------------------
-// mkdir is atomic on win32/macOS/Linux: exactly one caller wins the create.
-// We record the holder's PID inside so a crashed holder's lock can be broken.
-const LOCK_STALE_MS = 15_000;
-const LOCK_WAIT_MS = 5_000;
-
-function sleep(ms: number): void {
-  // Synchronous spin-free wait using Atomics — no busy loop, works everywhere.
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
+// Implemented in lock.ts. We pass our OWN lockPath so registry ops don't block
+// state.json ops (which use a separate lock domain).
 export function withLock<T>(fn: (r: Registry) => T): T {
-  mkdirSync(dir, { recursive: true });
-  const holderFile = join(lockPath, "holder");
-  const deadline = Date.now() + LOCK_WAIT_MS;
-  // NOTE: Date.now() is fine here — this runs in the built dist, never inside a
-  // Workflow script (the only place Date.now is stubbed).
-  for (;;) {
-    try {
-      mkdirSync(lockPath); // atomic: throws EEXIST if held
-      break;
-    } catch {
-      // Held. Break it if the holder is dead or the lock is ancient.
-      let broke = false;
-      try {
-        const holderPid = Number(readFileSync(holderFile, "utf8").trim());
-        if (!pidAlive(holderPid)) broke = true;
-      } catch {
-        // No holder file yet (racing creator) — treat age as the signal.
-      }
-      if (!broke) {
-        try {
-          const age = Date.now() - statMtime(lockPath);
-          if (age > LOCK_STALE_MS) broke = true;
-        } catch {
-          /* lock vanished between check and stat — retry */
-        }
-      }
-      if (broke) {
-        forceReleaseLock();
-        continue;
-      }
-      if (Date.now() > deadline) {
-        // Give up waiting and steal it rather than deadlock the user's music controls.
-        forceReleaseLock();
-        continue;
-      }
-      sleep(50);
-    }
-  }
-  try {
-    writeFileSync(holderFile, String(process.pid));
+  return withCrossProcessLock(lockPath, () => {
     const reg = readRaw();
     const result = fn(reg);
     writeRaw(reg);
     return result;
-  } finally {
-    releaseLock();
-  }
-}
-
-function statMtime(p: string): number {
-  return statSync(p).mtimeMs;
-}
-
-function releaseLock(): void {
-  try { rmSync(join(lockPath, "holder"), { force: true }); } catch { /* ignore */ }
-  try { rmdirSync(lockPath); } catch { /* already gone */ }
-}
-function forceReleaseLock(): void {
-  try { rmSync(lockPath, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
 }
 
 // --- public API (all lock-guarded) -----------------------------------------
@@ -152,7 +89,7 @@ export function addWatchdog(pid: number): void {
   });
 }
 
-// Snapshot of currently-live players (reuse-verified). Used by isPlaying().
+// Snapshot of currently-live players (reuse-verified).
 export function livePlayers(): ProcEntry[] {
   return withLock((r) => {
     r.players = prune(r.players);
@@ -160,11 +97,26 @@ export function livePlayers(): ProcEntry[] {
   });
 }
 
-export function liveWatchdogs(): ProcEntry[] {
-  return withLock((r) => {
-    r.watchdogs = prune(r.watchdogs);
-    return [...r.watchdogs];
-  });
+// Non-blocking count of registered players. Skips the cross-process lock: OK for
+// UI display (describe()), NOT OK for anything that mutates. May briefly read a
+// registry mid-write; on JSON parse failure we return 0 rather than throw. The
+// prune() call still filters dead / recycled pids using the start-token check.
+export function livePlayerCountUnlocked(): number {
+  try {
+    return prune(readRaw().players).length;
+  } catch {
+    return 0;
+  }
+}
+
+// Drop a specific pid from the registry without killing it. Used when a spawned
+// player/watchdog dies asynchronously (spawn error, immediate exit) — leaving
+// the dead pid registered would poison later prune() checks on token-less systems.
+export function removePlayer(pid: number): void {
+  withLock((r) => { r.players = r.players.filter((e) => e.pid !== pid); });
+}
+export function removeWatchdog(pid: number): void {
+  withLock((r) => { r.watchdogs = r.watchdogs.filter((e) => e.pid !== pid); });
 }
 
 // Remove entries and hand them back so the caller can kill them under no lock.

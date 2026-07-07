@@ -8,7 +8,7 @@
 import { spawn, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { now, readAnchor } from "./state.js";
+import { now, readAnchor, anchorAlive } from "./state.js";
 import { hosts } from "./stations.js";
 import { killPid, findOrphanPlayers } from "./proc.js";
 import {
@@ -16,12 +16,19 @@ import {
   addWatchdog,
   drainPlayers,
   drainWatchdogs,
-  livePlayers,
+  removePlayer,
+  removeWatchdog,
 } from "./registry.js";
 
 type Player = "mpv" | "ffplay";
 
+// Cache the detection result — this used to run on every play(), spawning
+// `where` / `command -v` synchronously each time. The detected binary doesn't
+// change during a session; if the user installs mpv mid-session they can call
+// resetDetectCache() (currently unused).
+let detected: Player | null | undefined; // undefined = not-yet-detected
 function detect(): Player | null {
+  if (detected !== undefined) return detected;
   for (const p of ["mpv", "ffplay"] as Player[]) {
     try {
       // argv array, no MSYS flag mangling. `command` is a shell builtin, so on
@@ -31,11 +38,13 @@ function detect(): Player | null {
       } else {
         execFileSync("sh", ["-c", `command -v ${p}`], { stdio: "ignore" });
       }
+      detected = p;
       return p;
     } catch {
       /* not found, try next */
     }
   }
+  detected = null;
   return null;
 }
 
@@ -62,7 +71,7 @@ export function stop(): void {
 // The safety net. Find any mpv/ffplay whose command line references one of our
 // stream hosts and kill it — this is what catches players that the registry
 // lost track of (the original "music keeps playing after terminal close" bug).
-export function sweepOrphans(): void {
+function sweepOrphans(): void {
   for (const pid of findOrphanPlayers(hosts())) killPid(pid);
 }
 
@@ -80,11 +89,21 @@ export function play(url: string, volume: number): void {
   // detached + unref lets the child outlive this short-lived CLI process.
   const child = spawn(player, args, { stdio: "ignore", detached: true, windowsHide: true });
   child.unref();
-  if (child.pid) {
+  // Handle three async terminations without leaving a dead pid in the registry:
+  //   - 'error' fires when the executable can't be launched (missing, permission)
+  //     even after spawn already returned a pid.
+  //   - 'exit' fires on normal termination too — after stop() has already killed
+  //     the pid, or when the stream ends. In both cases removePlayer is a no-op
+  //     because drainPlayers() cleared the entry first, but it's the right thing
+  //     to call for the "unexpected crash" case (bad URL, codec issue).
+  const pid = child.pid;
+  if (pid) {
     let host: string | undefined;
     try { host = new URL(url).host; } catch { /* leave undefined */ }
-    addPlayer(child.pid, host);
-    spawnWatchdog(child.pid);
+    addPlayer(pid, host);
+    child.on("error", () => removePlayer(pid));
+    child.on("exit", () => removePlayer(pid));
+    spawnWatchdog(pid);
   }
 }
 
@@ -93,7 +112,11 @@ export function play(url: string, volume: number): void {
 // running) → skip it; there's no session to bind to.
 function spawnWatchdog(playerPid: number): void {
   const anchor = readAnchor();
-  if (!anchor) return;
+  // Skip if there is no anchor at all (raw CLI, no MCP session) OR if the anchor
+  // belongs to a dead session (MCP crashed but anchor.json wasn't cleaned up).
+  // Otherwise the watchdog would poll a dead pid, immediately conclude "session
+  // dead", and kill the music we just started — self-suicide within seconds.
+  if (!anchor || !anchorAlive(anchor)) return;
   const wd = spawn(
     process.execPath,
     [
@@ -105,9 +128,14 @@ function spawnWatchdog(playerPid: number): void {
     { stdio: "ignore", detached: true, windowsHide: true }
   );
   wd.unref();
-  if (wd.pid) addWatchdog(wd.pid);
-}
-
-export function isPlaying(): boolean {
-  return livePlayers().length > 0;
+  const pid = wd.pid;
+  if (pid) {
+    addWatchdog(pid);
+    // If the watchdog script is missing / node itself fails / it exits early,
+    // don't leave a dead pid in the registry — otherwise stop() thinks a
+    // watchdog is guarding us when in fact nothing is, and orphan sweep is our
+    // only remaining safety net.
+    wd.on("error", () => removeWatchdog(pid));
+    wd.on("exit", () => removeWatchdog(pid));
+  }
 }

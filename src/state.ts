@@ -7,6 +7,8 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, unlinkS
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { procStartToken, sameProcess } from "./proc.js";
+import { livePlayerCountUnlocked } from "./registry.js";
+import { withCrossProcessLock } from "./lock.js";
 
 export type PlayState = "stopped" | "playing" | "paused";
 export type Source = "radio" | "spotify";
@@ -24,6 +26,7 @@ export interface NowPlaying {
 
 const stateDir = join(homedir(), ".pirate-radio");
 const statePath = join(stateDir, "state.json");
+const stateLockPath = join(stateDir, "state.lock");
 // The MCP server writes its own PID + start-token here on startup. It is a child
 // of the Claude Code session, so when the session/terminal closes (even a hard
 // kill) this process dies. The watchdog polls this to know when to stop music.
@@ -47,29 +50,80 @@ const defaults: NowPlaying = {
 export const now: NowPlaying = { ...defaults };
 
 export function loadState(): void {
+  withCrossProcessLock(stateLockPath, () => loadStateUnlocked());
+}
+
+// Run a mutation with state.json fresh-loaded on entry and atomically persisted
+// on exit, all under one lock acquisition. This is what tool handlers should use
+// instead of loadState/mutate/saveState separately — that pattern lets a second
+// writer sneak in between load and save and lost-update fields it didn't touch.
+export async function withState<T>(fn: () => Promise<T> | T): Promise<T> {
+  // Note the lock is held across the async fn — Spotify API calls can therefore
+  // hold it for hundreds of ms. Alternatives (optimistic reload-on-save) are
+  // more code for a tool where concurrent tool calls are rare. Keep it simple.
+  return withCrossProcessLock<Promise<T>>(stateLockPath, async () => {
+    loadStateUnlocked();
+    const out = await fn();
+    saveStateUnlocked();
+    return out;
+  });
+}
+
+// Internal read that the lock helper wraps. Also used by saveState so the
+// read-modify-write sequence for a single caller runs under one lock acquisition.
+// Per-field expected primitive type. Written by hand because `typeof defaults[k]`
+// gives "object" for nullable string fields (e.g. source starts as null), which
+// would then reject a valid string value like "radio". If you add a NowPlaying
+// field, add its type here too.
+const fieldType: Record<keyof NowPlaying, "string" | "number"> = {
+  state: "string",
+  source: "string",
+  genre: "string",
+  stationName: "string",
+  stationIndex: "number",
+  title: "string",
+  volume: "number",
+  spotifyVerifier: "string",
+};
+
+function loadStateUnlocked(): void {
   if (!existsSync(statePath)) return;
+  let raw: Record<string, unknown> = {};
   try {
-    const raw = JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>;
-    // Whitelist known keys only. Older state files carried mpvPid/watchdogPid;
-    // copying raw wholesale would resurrect those dead fields and persist them
-    // right back out. Pull each field explicitly, falling back to the default.
-    const target = now as unknown as Record<string, unknown>;
-    for (const key of Object.keys(defaults) as (keyof NowPlaying)[]) {
-      target[key] = key in raw ? raw[key] : defaults[key];
-    }
+    raw = JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>;
   } catch {
-    // Corrupt state file — reset to defaults rather than crashing.
+    // Whole-file parse failure — reset to defaults and move on. This is rare
+    // (atomic write should prevent truncation) but if it happens the alternative
+    // is crashing every subsequent tool call.
+    process.stderr.write("pirate-radio: state.json unreadable, resetting to defaults\n");
     Object.assign(now, defaults);
+    return;
+  }
+  // Per-field: accept null (all fields except stationIndex/volume are nullable
+  // in effect) or a value of the expected primitive type; otherwise fall back
+  // to that field's default. Salvages good fields even when one is corrupt.
+  const target = now as unknown as Record<string, unknown>;
+  for (const key of Object.keys(defaults) as (keyof NowPlaying)[]) {
+    const got = raw[key];
+    if (got === null || typeof got === fieldType[key]) target[key] = got;
+    else target[key] = defaults[key];
   }
 }
 
-// Atomic write (temp + rename) so a hard-killed process can't leave a truncated
-// state.json that loadState would then discard as corrupt.
-export function saveState(): void {
+function saveStateUnlocked(): void {
   mkdirSync(stateDir, { recursive: true });
   const tmp = `${statePath}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(now, null, 2));
   renameSync(tmp, statePath);
+}
+
+// Atomic write (temp + rename) so a hard-killed process can't leave a truncated
+// state.json that loadState would then discard as corrupt. Held under a cross-
+// process lock so concurrent CLI + MCP writers can't lost-update each other's
+// fields (before this, e.g. a volume change would silently overwrite a genre
+// change from a parallel CLI).
+export function saveState(): void {
+  withCrossProcessLock(stateLockPath, () => saveStateUnlocked());
 }
 
 // --- session anchor -------------------------------------------------------
@@ -83,8 +137,6 @@ export function writeAnchor(pid: number): void {
   const tmp = `${anchorPath}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(anchor));
   renameSync(tmp, anchorPath);
-  // Remove the pre-token legacy anchor file, if a prior version left one behind.
-  try { unlinkSync(join(stateDir, "anchor.pid")); } catch { /* none — fine */ }
 }
 
 export function readAnchor(): Anchor | null {
@@ -112,12 +164,15 @@ export function clearAnchor(): void {
   try { unlinkSync(anchorPath); } catch { /* already gone */ }
 }
 
-export function statePathFor(): string {
-  return statePath;
-}
-
 export function describe(): string {
   if (now.state === "stopped") return "Stopped.";
+  // Reconcile with reality for the local radio path: if the mpv/ffplay we
+  // recorded is dead (crashed, OOM, user-kill), the on-disk state still says
+  // "playing" until the next explicit stop/play. Show that honestly. We don't
+  // do this for Spotify — its "device" is remote and we'd need an API call.
+  if (now.source === "radio" && now.state === "playing" && livePlayerCountUnlocked() === 0) {
+    return "Stopped (player exited unexpectedly).";
+  }
   const what =
     now.source === "radio"
       ? `${now.genre} radio — ${now.stationName}`

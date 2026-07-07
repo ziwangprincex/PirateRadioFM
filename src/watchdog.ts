@@ -15,7 +15,7 @@
 //      so nothing our tool started can survive the session.
 //
 // Invoked as: node dist/watchdog.js <anchorPid> <anchorToken> <playerPid>
-import { clearAnchor, type Anchor } from "./state.js";
+import { clearAnchor, readAnchor, type Anchor } from "./state.js";
 import { pidAlive, sameProcess, killPid, findOrphanPlayers } from "./proc.js";
 import { hosts } from "./stations.js";
 import { drainAll, livePlayers } from "./registry.js";
@@ -30,6 +30,15 @@ if (!Number.isInteger(anchorPid) || !Number.isInteger(playerPid)) {
 
 const anchor: Anchor = { pid: anchorPid, token: anchorToken };
 
+// Cross-session safety: we only own the anchor file if the CURRENT anchor on
+// disk still matches the (pid, token) we were spawned for. If a newer session
+// has since overwritten anchor.json, we must NOT drain/clear on its behalf —
+// its own watchdog handles that. Silently exit instead.
+function stillOurAnchor(): boolean {
+  const cur = readAnchor();
+  return !!cur && cur.pid === anchor.pid && (cur.token ?? null) === (anchor.token ?? null);
+}
+
 function stopEverything(): void {
   const { players, watchdogs } = drainAll();
   for (const p of players) killPid(p.pid);
@@ -41,12 +50,13 @@ function stopEverything(): void {
   clearAnchor();
 }
 
-// Re-verifying the start token every poll is relatively expensive (spawns ps /
-// powershell on non-Linux). Do the cheap pidAlive check every tick and only pay
-// for the token re-verify occasionally — enough to catch PID reuse promptly
-// without hammering the system.
-const POLL_MS = 2000;
-const TOKEN_EVERY = 5; // re-verify token roughly every 10s
+// Re-verifying the start token every poll is expensive on Windows (each check
+// cold-starts PowerShell, ~200-500ms). Do the cheap pidAlive probe often and
+// pay for the token re-verify rarely. Trade-off: worst-case delay between
+// session-death and music-stop is POLL_MS * TOKEN_EVERY = 30s. If that ever
+// matters more than CPU, cut TOKEN_EVERY back down.
+const POLL_MS = 3000;
+const TOKEN_EVERY = 10; // re-verify token roughly every 30s
 let tick = 0;
 
 const timer = setInterval(() => {
@@ -66,6 +76,12 @@ const timer = setInterval(() => {
     !cheapDead && tick % TOKEN_EVERY === 0 && !sameProcess(anchor.pid, anchor.token);
 
   if (cheapDead || reuseDead) {
+    // A concurrent session may have taken over the anchor file. If so, exit
+    // quietly and let its own watchdog manage things — do not drain its state.
+    if (!stillOurAnchor()) {
+      clearInterval(timer);
+      process.exit(0);
+    }
     stopEverything();
     clearInterval(timer);
     process.exit(0);

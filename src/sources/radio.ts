@@ -1,5 +1,6 @@
 // Radio source: picks/rotates stations from the shared station list, drives the player.
 import * as player from "../player.js";
+import * as spotify from "./spotify.js";
 import { now } from "../state.js";
 import { all, genres as allGenres, type Station } from "../stations.js";
 
@@ -20,9 +21,15 @@ function normalize(genre: string): string | null {
   return genres().includes(g) ? g : null;
 }
 
-export function playGenre(genre: string, index = 0): Station {
+export async function playGenre(genre: string, index = 0): Promise<Station> {
   const g = normalize(genre);
   if (!g) throw new Error(`Unknown genre "${genre}". Available: ${genres().join(", ")}`);
+  // If we were on Spotify, silence it before starting the local stream — otherwise
+  // both would play simultaneously (Spotify runs on its own Connect device, our
+  // player.stop() only kills local mpv/ffplay).
+  if (now.source === "spotify") {
+    try { await spotify.pause(); } catch { /* best effort — network / not-logged-in */ }
+  }
   const st = stations[g][index % stations[g].length];
   player.play(st.url, now.volume);
   now.state = "playing";
@@ -33,13 +40,13 @@ export function playGenre(genre: string, index = 0): Station {
   return st;
 }
 
-export function next(): Station {
+export async function next(): Promise<Station> {
   if (now.source !== "radio" || !now.genre)
     throw new Error("No radio station is playing.");
   return playGenre(now.genre, now.stationIndex + 1);
 }
 
-export function prev(): Station {
+export async function prev(): Promise<Station> {
   if (now.source !== "radio" || !now.genre)
     throw new Error("No radio station is playing.");
   const len = stations[now.genre].length;

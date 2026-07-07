@@ -9,25 +9,21 @@ interface Tool { name: string; description: string; schema: any; handler: Handle
 
 const noArgs = { type: "object", properties: {}, additionalProperties: false };
 
-function reply(text: string, _opts?: { scratch?: boolean }): string {
-  return text;
-}
-
 export const tools: Tool[] = [
   {
     name: "radio_list",
     description: "List available built-in radio genres and current playback state.",
     schema: noArgs,
-    handler: () => reply(`Genres: ${radio.list()}\n${describe()}`),
+    handler: () => `Genres: ${radio.list()}\n${describe()}`,
   },
   {
     name: "radio_play",
     // Genre list derived from the station data so it never drifts out of sync.
     description: `Play a built-in genre radio station. Genres: ${radio.genres().join(", ")}.`,
     schema: { type: "object", properties: { genre: { type: "string" } }, required: ["genre"] },
-    handler: (a) => {
-      const st = radio.playGenre(String(a.genre));
-      return reply(`> ${now.genre} — ${st.name}`);
+    handler: async (a) => {
+      const st = await radio.playGenre(String(a.genre));
+      return `> ${now.genre} — ${st.name}`;
     },
   },
   {
@@ -35,9 +31,9 @@ export const tools: Tool[] = [
     description: "Switch to the next station (radio) or next track (Spotify).",
     schema: noArgs,
     handler: async () => {
-      if (now.source === "spotify") { await spotify.skipNext(); return reply("Next track."); }
-      const st = radio.next();
-      return reply(`Next: ${now.genre} — ${st.name}`);
+      if (now.source === "spotify") { await spotify.skipNext(); return "Next track."; }
+      const st = await radio.next();
+      return `Next: ${now.genre} — ${st.name}`;
     },
   },
   {
@@ -45,9 +41,9 @@ export const tools: Tool[] = [
     description: "Switch to the previous station (radio) or previous track (Spotify).",
     schema: noArgs,
     handler: async () => {
-      if (now.source === "spotify") { await spotify.skipPrev(); return reply("Previous track."); }
-      const st = radio.prev();
-      return reply(`Prev: ${now.genre} — ${st.name}`);
+      if (now.source === "spotify") { await spotify.skipPrev(); return "Previous track."; }
+      const st = await radio.prev();
+      return `Prev: ${now.genre} — ${st.name}`;
     },
   },
   {
@@ -55,10 +51,13 @@ export const tools: Tool[] = [
     description: "Pause playback (radio: stops the stream; Spotify: pauses the device).",
     schema: noArgs,
     handler: async () => {
-      if (now.source === "spotify") await spotify.pause();
+      // Reflect the user's INTENT in state even if the underlying call fails —
+      // otherwise a Spotify network hiccup leaves now.state stuck at "playing"
+      // and radio_now_playing lies.
+      if (now.source === "spotify") { try { await spotify.pause(); } catch { /* keep going */ } }
       else player.stop();
       now.state = "paused";
-      return reply("|| Paused.");
+      return "|| Paused.";
     },
   },
   {
@@ -67,38 +66,46 @@ export const tools: Tool[] = [
     schema: noArgs,
     handler: async () => {
       if (now.source === "spotify") await spotify.resume();
-      else if (now.source === "radio" && now.genre) radio.playGenre(now.genre, now.stationIndex);
+      else if (now.source === "radio" && now.genre) await radio.playGenre(now.genre, now.stationIndex);
       else throw new Error("Nothing to resume. Use radio_play or spotify_play_playlist.");
       now.state = "playing";
-      return reply("> Resumed.");
+      return "> Resumed.";
     },
   },
   {
     name: "radio_stop",
     description: "Stop playback entirely.",
     schema: noArgs,
-    handler: () => {
-      player.stop();
+    handler: async () => {
+      // Same rationale as radio_pause: user asked to stop, respect that in
+      // state regardless of whether the remote call succeeded.
+      if (now.source === "spotify") { try { await spotify.pause(); } catch { /* keep going */ } }
+      else player.stop();
       now.state = "stopped";
       now.source = null;
-      return reply("[] Stopped.");
+      return "[] Stopped.";
     },
   },
   {
     name: "radio_now_playing",
     description: "Show what is currently playing.",
     schema: noArgs,
-    handler: () => reply(describe()),
+    handler: () => describe(),
   },
   {
     name: "radio_volume",
     description: "Set volume 0-100 (applies to radio; restarts the current stream).",
     schema: { type: "object", properties: { level: { type: "number", minimum: 0, maximum: 100 } }, required: ["level"] },
-    handler: (a) => {
+    handler: async (a) => {
       now.volume = Math.max(0, Math.min(100, Math.round(Number(a.level))));
       if (now.source === "radio" && now.state === "playing" && now.genre)
-        radio.playGenre(now.genre, now.stationIndex);
-      return reply(`vol ${now.volume}`);
+        await radio.playGenre(now.genre, now.stationIndex);
+      else if (now.source === "spotify" && now.state === "playing") {
+        // Best-effort: user's intent is to change volume, so recording it in
+        // state should stick even if the remote device call fails.
+        try { await spotify.setVolume(now.volume); } catch { /* keep going */ }
+      }
+      return `vol ${now.volume}`;
     },
   },
   {
@@ -124,6 +131,6 @@ export const tools: Tool[] = [
     name: "spotify_play_playlist",
     description: "Play a Spotify playlist/podcast by name or uri. Requires Premium + a running Spotify client.",
     schema: { type: "object", properties: { target: { type: "string" } }, required: ["target"] },
-    handler: async (a) => reply(await spotify.playContext(String(a.target))),
+    handler: async (a) => spotify.playContext(String(a.target)),
   },
 ];
