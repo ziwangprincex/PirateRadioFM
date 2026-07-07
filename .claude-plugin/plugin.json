@@ -1,12 +1,12 @@
 {
-  "name": "pirate-radio",
+  "name": "radiohead",
   "version": "0.1.0",
   "description": "Radio + Spotify for Claude Code. Auto-stops when your session ends.",
   "author": {
     "name": "princewwang"
   },
   "mcpServers": {
-    "pirate-radio": {
+    "radiohead": {
       "command": "node",
       "args": ["${CLAUDE_PLUGIN_ROOT}/dist/index.js"]
     }

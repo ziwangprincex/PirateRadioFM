@@ -19,12 +19,12 @@ Then add the marketplace and install:
 
 ```bash
 claude plugin marketplace add nanawanzii/PirateRadioFM
-claude plugin install pirate-radio@pirate-radio-local
+claude plugin install radiohead@radiohead
 ```
 Or
 ```bash
 /plugin marketplace add nanawanzii/PirateRadioFM
-/plugin install pirate-radio@pirate-radio-local
+/plugin install radiohead@radiohead
 ```
 
 **Restart Claude Code.** In a new session, type `/` — you should see `/jazz`,
@@ -33,8 +33,8 @@ Or
 Uninstall:
 
 ```bash
-claude plugin uninstall pirate-radio
-claude plugin marketplace remove pirate-radio-local
+claude plugin uninstall radiohead
+claude plugin marketplace remove radiohead
 ```
 
 ---
@@ -75,20 +75,31 @@ claude plugin marketplace remove pirate-radio-local
 
 | Command | What it does |
 |---|---|
-| `/pause` | Pause playback |
-| `/play` | Resume |
-| `/next` | Next station / channel |
-| `/prev` | Previous station / channel |
+| `/play` | Play jazz radio (default), or resume if paused |
+| `/pause` | Pause playback (resumable) |
+| `/resume` | Resume paused playback |
+| `/stop` | Stop playback entirely |
+| `/next` | Next station / channel / track |
+| `/prev` | Previous station / channel / track |
+| `/volume <0-100>` | Set volume, e.g. `/volume 60` |
+| `/now-playing` | Show what's currently playing |
 
 Stations with more than one stream (`/nts`, `/paradise`) rotate between their
 channels with `/next`.
 
+### Spotify
+
+Remote-controls a running Spotify client (requires Spotify Premium).
+
+| Command | What it does |
+|---|---|
+| `/spotify-login` | Start the Spotify OAuth login flow |
+| `/spotify-complete-login <code>` | Finish login by pasting the code from the redirect URL |
+| `/spotify-list` | List your playlists |
+| `/spotify-play <name-or-uri>` | Play a playlist by name or URI |
+
+Once Spotify is playing, `/pause`, `/resume`, `/next`, `/prev` and `/volume`
+control it too.
+
 You can also just talk to the agent: *"play some jazz"*, *"switch station"*,
 *"set volume to 60"*, *"stop the music"*.
-
----
-
-## Roadmap
-
-- **Spotify remote control** — play your own playlists / podcasts / albums
-  through a running Spotify client. *(Coming soon.)*
