@@ -2,9 +2,9 @@
 import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);
 
 // src/state.ts
-import { readFileSync as readFileSync2, writeFileSync, renameSync, mkdirSync, existsSync, unlinkSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { readFileSync as readFileSync4, writeFileSync as writeFileSync3, renameSync as renameSync2, mkdirSync as mkdirSync3, existsSync as existsSync2, unlinkSync } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { join as join3 } from "node:path";
 
 // src/proc.ts
 import { execFileSync } from "node:child_process";
@@ -70,6 +70,16 @@ function killPid(pid) {
       });
     } else {
       process.kill(pid, "SIGTERM");
+      const deadline = Date.now() + 250;
+      while (Date.now() < deadline && pidAlive(pid)) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+      }
+      if (pidAlive(pid)) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+        }
+      }
     }
   } catch {
   }
@@ -129,72 +139,105 @@ function parseUnixPs(out, matches) {
   return pids;
 }
 
-// src/state.ts
-var stateDir = join(homedir(), ".pirate-radio");
-var statePath = join(stateDir, "state.json");
-var anchorPath = join(stateDir, "anchor.json");
-var defaults = {
-  state: "stopped",
-  source: null,
-  genre: null,
-  stationName: null,
-  stationIndex: 0,
-  title: null,
-  volume: 80,
-  spotifyVerifier: null
-};
-var now = { ...defaults };
-function clearAnchor() {
+// src/registry.ts
+import {
+  readFileSync as readFileSync3,
+  writeFileSync as writeFileSync2,
+  renameSync,
+  mkdirSync as mkdirSync2,
+  existsSync
+} from "node:fs";
+import { homedir } from "node:os";
+import { join as join2 } from "node:path";
+
+// src/lock.ts
+import { mkdirSync, readFileSync as readFileSync2, writeFileSync, rmSync, rmdirSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+var LOCK_STALE_MS = 15e3;
+var LOCK_WAIT_MS = 3e4;
+function sleep(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+function statMtime(p) {
+  return statSync(p).mtimeMs;
+}
+function withCrossProcessLock(lockPath2, fn) {
+  mkdirSync(dirname(lockPath2), { recursive: true });
+  const holderFile = join(lockPath2, "holder");
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (; ; ) {
+    try {
+      mkdirSync(lockPath2);
+      break;
+    } catch {
+      let broke = false;
+      try {
+        const holderPid = Number(readFileSync2(holderFile, "utf8").trim());
+        if (!pidAlive(holderPid)) broke = true;
+      } catch {
+      }
+      if (!broke) {
+        try {
+          const age = Date.now() - statMtime(lockPath2);
+          if (age > LOCK_STALE_MS) broke = true;
+        } catch {
+        }
+      }
+      if (broke) {
+        forceRelease(lockPath2);
+        continue;
+      }
+      if (Date.now() > deadline) {
+        forceRelease(lockPath2);
+        continue;
+      }
+      sleep(50);
+    }
+  }
   try {
-    unlinkSync(anchorPath);
+    writeFileSync(holderFile, String(process.pid));
+    const result = fn();
+    if (result && typeof result.then === "function") {
+      return (async () => {
+        try {
+          return await result;
+        } finally {
+          release(lockPath2);
+        }
+      })();
+    }
+    release(lockPath2);
+    return result;
+  } catch (e) {
+    release(lockPath2);
+    throw e;
+  }
+}
+function release(lockPath2) {
+  try {
+    rmSync(join(lockPath2, "holder"), { force: true });
+  } catch {
+  }
+  try {
+    rmdirSync(lockPath2);
+  } catch {
+  }
+}
+function forceRelease(lockPath2) {
+  try {
+    rmSync(lockPath2, { recursive: true, force: true });
   } catch {
   }
 }
 
-// src/stations.ts
-import { readFileSync as readFileSync3 } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join as join2 } from "node:path";
-var here = dirname(fileURLToPath(import.meta.url));
-var stations = JSON.parse(
-  readFileSync3(join2(here, "..", "data", "stations.json"), "utf8")
-);
-var hostCache = null;
-function hosts() {
-  if (hostCache) return hostCache;
-  const set = /* @__PURE__ */ new Set();
-  for (const list of Object.values(stations)) {
-    for (const st of list) {
-      try {
-        set.add(new URL(st.url).host.toLowerCase());
-      } catch {
-      }
-    }
-  }
-  hostCache = [...set];
-  return hostCache;
-}
-
 // src/registry.ts
-import {
-  readFileSync as readFileSync4,
-  writeFileSync as writeFileSync2,
-  renameSync as renameSync2,
-  mkdirSync as mkdirSync2,
-  rmSync,
-  rmdirSync,
-  existsSync as existsSync2,
-  statSync
-} from "node:fs";
-import { homedir as homedir2 } from "node:os";
-import { join as join3 } from "node:path";
-var dir = join3(homedir2(), ".pirate-radio");
-var registryPath = join3(dir, "players.json");
-var lockPath = join3(dir, "players.lock");
+var dir = join2(homedir(), ".pirate-radio");
+var registryPath = join2(dir, "players.json");
+var lockPath = join2(dir, "players.lock");
 function readRaw() {
-  if (!existsSync2(registryPath)) return { players: [], watchdogs: [] };
+  if (!existsSync(registryPath)) return { players: [], watchdogs: [] };
   try {
-    const r = JSON.parse(readFileSync4(registryPath, "utf8"));
+    const r = JSON.parse(readFileSync3(registryPath, "utf8"));
     return { players: r.players ?? [], watchdogs: r.watchdogs ?? [] };
   } catch {
     return { players: [], watchdogs: [] };
@@ -204,74 +247,15 @@ function writeRaw(r) {
   mkdirSync2(dir, { recursive: true });
   const tmp = `${registryPath}.${process.pid}.tmp`;
   writeFileSync2(tmp, JSON.stringify(r, null, 2));
-  renameSync2(tmp, registryPath);
-}
-var LOCK_STALE_MS = 15e3;
-var LOCK_WAIT_MS = 5e3;
-function sleep(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  renameSync(tmp, registryPath);
 }
 function withLock(fn) {
-  mkdirSync2(dir, { recursive: true });
-  const holderFile = join3(lockPath, "holder");
-  const deadline = Date.now() + LOCK_WAIT_MS;
-  for (; ; ) {
-    try {
-      mkdirSync2(lockPath);
-      break;
-    } catch {
-      let broke = false;
-      try {
-        const holderPid = Number(readFileSync4(holderFile, "utf8").trim());
-        if (!pidAlive(holderPid)) broke = true;
-      } catch {
-      }
-      if (!broke) {
-        try {
-          const age = Date.now() - statMtime(lockPath);
-          if (age > LOCK_STALE_MS) broke = true;
-        } catch {
-        }
-      }
-      if (broke) {
-        forceReleaseLock();
-        continue;
-      }
-      if (Date.now() > deadline) {
-        forceReleaseLock();
-        continue;
-      }
-      sleep(50);
-    }
-  }
-  try {
-    writeFileSync2(holderFile, String(process.pid));
+  return withCrossProcessLock(lockPath, () => {
     const reg = readRaw();
     const result = fn(reg);
     writeRaw(reg);
     return result;
-  } finally {
-    releaseLock();
-  }
-}
-function statMtime(p) {
-  return statSync(p).mtimeMs;
-}
-function releaseLock() {
-  try {
-    rmSync(join3(lockPath, "holder"), { force: true });
-  } catch {
-  }
-  try {
-    rmdirSync(lockPath);
-  } catch {
-  }
-}
-function forceReleaseLock() {
-  try {
-    rmSync(lockPath, { recursive: true, force: true });
-  } catch {
-  }
+  });
 }
 function livePlayers() {
   return withLock((r) => {
@@ -292,6 +276,68 @@ function prune(list) {
   return list.filter((e) => sameProcess(e.pid, e.token));
 }
 
+// src/state.ts
+var stateDir = join3(homedir2(), ".pirate-radio");
+var statePath = join3(stateDir, "state.json");
+var stateLockPath = join3(stateDir, "state.lock");
+var anchorPath = join3(stateDir, "anchor.json");
+var defaults = {
+  state: "stopped",
+  source: null,
+  genre: null,
+  stationName: null,
+  stationIndex: 0,
+  title: null,
+  volume: 80,
+  spotifyVerifier: null
+};
+var now = { ...defaults };
+function readAnchor() {
+  if (!existsSync2(anchorPath)) return null;
+  try {
+    const a = JSON.parse(readFileSync4(anchorPath, "utf8"));
+    if (typeof a.pid === "number" && a.pid > 0) {
+      return { pid: a.pid, token: a.token ?? null };
+    }
+  } catch {
+  }
+  return null;
+}
+function clearAnchor() {
+  try {
+    unlinkSync(anchorPath);
+  } catch {
+  }
+}
+
+// src/stations.ts
+import { readFileSync as readFileSync5 } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname as dirname2, join as join4 } from "node:path";
+var here = dirname2(fileURLToPath(import.meta.url));
+var stations = {};
+try {
+  stations = JSON.parse(readFileSync5(join4(here, "..", "data", "stations.json"), "utf8"));
+} catch (e) {
+  process.stderr.write(`pirate-radio: failed to load stations.json \u2014 ${e.message}
+`);
+}
+var hostCache = null;
+function hosts() {
+  if (hostCache) return hostCache;
+  const set = /* @__PURE__ */ new Set();
+  for (const list of Object.values(stations)) {
+    for (const st of list) {
+      try {
+        set.add(new URL(st.url).host.toLowerCase());
+      } catch {
+      }
+    }
+  }
+  hostCache = [...set];
+  return hostCache;
+}
+
 // src/watchdog.ts
 var anchorPid = Number(process.argv[2]);
 var anchorToken = process.argv[3] ? process.argv[3] : null;
@@ -300,6 +346,10 @@ if (!Number.isInteger(anchorPid) || !Number.isInteger(playerPid)) {
   process.exit(1);
 }
 var anchor = { pid: anchorPid, token: anchorToken };
+function stillOurAnchor() {
+  const cur = readAnchor();
+  return !!cur && cur.pid === anchor.pid && (cur.token ?? null) === (anchor.token ?? null);
+}
 function stopEverything() {
   const { players, watchdogs } = drainAll();
   for (const p of players) killPid(p.pid);
@@ -309,8 +359,8 @@ function stopEverything() {
   for (const pid of findOrphanPlayers(hosts())) killPid(pid);
   clearAnchor();
 }
-var POLL_MS = 2e3;
-var TOKEN_EVERY = 5;
+var POLL_MS = 3e3;
+var TOKEN_EVERY = 10;
 var tick = 0;
 var timer = setInterval(() => {
   tick++;
@@ -321,6 +371,10 @@ var timer = setInterval(() => {
   const cheapDead = !pidAlive(anchor.pid);
   const reuseDead = !cheapDead && tick % TOKEN_EVERY === 0 && !sameProcess(anchor.pid, anchor.token);
   if (cheapDead || reuseDead) {
+    if (!stillOurAnchor()) {
+      clearInterval(timer);
+      process.exit(0);
+    }
     stopEverything();
     clearInterval(timer);
     process.exit(0);

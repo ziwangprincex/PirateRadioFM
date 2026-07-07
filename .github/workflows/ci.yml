@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci --no-audit --no-fund
+      - run: npm run check
+      # dist/ is checked into git (the plugin ships pre-bundled). Verify the
+      # committed dist matches what `npm run build` produces from src — if it
+      # doesn't, someone forgot to rebuild before committing.
+      - name: Verify dist is up to date
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          if [ -n "$(git status --porcelain dist/)" ]; then
+            echo "::error::dist/ is out of sync with src/. Run 'npm run build' and commit."
+            git --no-pager diff dist/
+            exit 1
+          fi
