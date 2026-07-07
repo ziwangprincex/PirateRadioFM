@@ -19,7 +19,7 @@ let stations: Stations = {};
 try {
   stations = JSON.parse(readFileSync(join(here, "..", "data", "stations.json"), "utf8"));
 } catch (e) {
-  process.stderr.write(`pirate-radio: failed to load stations.json — ${(e as Error).message}\n`);
+  process.stderr.write(`radiohead: failed to load stations.json — ${(e as Error).message}\n`);
 }
 
 export function all(): Stations {

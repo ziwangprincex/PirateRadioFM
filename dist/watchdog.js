@@ -292,6 +292,7 @@ var defaults = {
   spotifyVerifier: null
 };
 var now = { ...defaults };
+var inProcTail = Promise.resolve();
 function readAnchor() {
   if (!existsSync2(anchorPath)) return null;
   try {
@@ -319,7 +320,7 @@ var stations = {};
 try {
   stations = JSON.parse(readFileSync5(join4(here, "..", "data", "stations.json"), "utf8"));
 } catch (e) {
-  process.stderr.write(`pirate-radio: failed to load stations.json \u2014 ${e.message}
+  process.stderr.write(`radiohead: failed to load stations.json \u2014 ${e.message}
 `);
 }
 var hostCache = null;

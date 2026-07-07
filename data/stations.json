@@ -1,54 +1,55 @@
 {
   "jazz": [
-    { "name": "SomaFM Groove Salad", "url": "https://ice1.somafm.com/groovesalad-128-mp3" },
-    { "name": "SomaFM Sonic Universe", "url": "https://ice1.somafm.com/sonicuniverse-128-mp3" }
+    { "name": "Radio Swiss Jazz", "url": "https://stream.srg-ssr.ch/m/rsj/mp3_128" },
+    { "name": "SomaFM Sonic Universe", "url": "https://ice4.somafm.com/sonicuniverse-128-mp3" }
   ],
   "classical": [
     { "name": "Venice Classic Radio", "url": "https://uk2.streamingpulse.com/ssl/vcr1" },
-    { "name": "SomaFM Sanctuary", "url": "https://ice1.somafm.com/sanctuary-128-mp3" }
+    { "name": "Radio Swiss Classic", "url": "https://stream.srg-ssr.ch/m/rsc_de/mp3_128" }
   ],
   "indie": [
-    { "name": "SomaFM Indie Pop Rocks", "url": "https://ice1.somafm.com/indiepop-128-mp3" },
-    { "name": "SomaFM Left Coast 70s", "url": "https://ice1.somafm.com/seventies-128-mp3" }
+    { "name": "SomaFM Indie Pop Rocks", "url": "https://ice4.somafm.com/indiepop-128-mp3" },
+    { "name": "SomaFM Covers", "url": "https://ice4.somafm.com/covers-128-mp3" }
   ],
   "rock": [
-    { "name": "SomaFM Metal Detector", "url": "https://ice1.somafm.com/metal-128-mp3" },
-    { "name": "SomaFM BAGeL Radio", "url": "https://ice1.somafm.com/bagel-128-mp3" }
+    { "name": "SomaFM Left Coast 70s", "url": "https://ice4.somafm.com/seventies-128-mp3" },
+    { "name": "SomaFM Metal Detector", "url": "https://ice4.somafm.com/metal-128-mp3" }
   ],
   "country": [
-    { "name": "SomaFM Boot Liquor", "url": "https://ice1.somafm.com/bootliquor-128-mp3" }
+    { "name": "SomaFM Boot Liquor", "url": "https://ice4.somafm.com/bootliquor-128-mp3" }
   ],
   "pop": [
-    { "name": "SomaFM PopTron", "url": "https://ice1.somafm.com/poptron-128-mp3" },
-    { "name": "SomaFM Beat Blender", "url": "https://ice1.somafm.com/beatblender-128-mp3" }
+    { "name": "SomaFM PopTron", "url": "https://ice4.somafm.com/poptron-128-mp3" }
   ],
   "ambient": [
-    { "name": "SomaFM Drone Zone", "url": "https://ice1.somafm.com/dronezone-128-mp3" },
-    { "name": "SomaFM Space Station Soma", "url": "https://ice1.somafm.com/spacestation-128-mp3" },
-    { "name": "SomaFM Deep Space One", "url": "https://ice1.somafm.com/deepspaceone-128-mp3" }
+    { "name": "SomaFM Drone Zone", "url": "https://ice4.somafm.com/dronezone-128-mp3" },
+    { "name": "SomaFM Space Station Soma", "url": "https://ice4.somafm.com/spacestation-128-mp3" },
+    { "name": "SomaFM Deep Space One", "url": "https://ice4.somafm.com/deepspaceone-128-mp3" }
   ],
   "lofi": [
-    { "name": "SomaFM Lush", "url": "https://ice1.somafm.com/lush-128-mp3" },
-    { "name": "SomaFM Fluid", "url": "https://ice1.somafm.com/fluid-128-mp3" }
+    { "name": "SomaFM Groove Salad", "url": "https://ice4.somafm.com/groovesalad-128-mp3" },
+    { "name": "SomaFM Fluid", "url": "https://ice4.somafm.com/fluid-128-mp3" },
+    { "name": "SomaFM Lush", "url": "https://ice4.somafm.com/lush-128-mp3" }
   ],
   "soul": [
-    { "name": "SomaFM Seven Inch Soul", "url": "https://ice1.somafm.com/7soul-128-mp3" },
-    { "name": "SomaFM Illinois Street Lounge", "url": "https://ice1.somafm.com/illstreet-128-mp3" }
+    { "name": "SomaFM Seven Inch Soul", "url": "https://ice4.somafm.com/7soul-128-mp3" },
+    { "name": "SomaFM Illinois Street Lounge", "url": "https://ice4.somafm.com/illstreet-128-mp3" }
   ],
   "eighties": [
-    { "name": "SomaFM Underground 80s", "url": "https://ice1.somafm.com/u80s-128-mp3" }
+    { "name": "SomaFM Underground 80s", "url": "https://ice4.somafm.com/u80s-128-mp3" }
   ],
   "world": [
-    { "name": "SomaFM ThistleRadio", "url": "https://ice1.somafm.com/thistle-128-mp3" },
-    { "name": "SomaFM Folk Forward", "url": "https://ice1.somafm.com/folkfwd-128-mp3" }
+    { "name": "SomaFM ThistleRadio", "url": "https://ice4.somafm.com/thistle-128-mp3" },
+    { "name": "SomaFM Folk Forward", "url": "https://ice4.somafm.com/folkfwd-128-mp3" },
+    { "name": "SomaFM Suburbs of Goa", "url": "https://ice4.somafm.com/suburbsofgoa-128-mp3" }
   ],
   "house": [
-    { "name": "SomaFM The Trip", "url": "https://ice1.somafm.com/thetrip-128-mp3" },
-    { "name": "SomaFM Suburbs of Goa", "url": "https://ice1.somafm.com/suburbsofgoa-128-mp3" }
+    { "name": "SomaFM The Trip", "url": "https://ice4.somafm.com/thetrip-128-mp3" },
+    { "name": "SomaFM Beat Blender", "url": "https://ice4.somafm.com/beatblender-128-mp3" }
   ],
   "techno": [
-    { "name": "SomaFM cliqhop idm", "url": "https://ice1.somafm.com/cliqhop-128-mp3" },
-    { "name": "SomaFM Dub Step Beyond", "url": "https://ice1.somafm.com/dubstep-128-mp3" }
+    { "name": "SomaFM cliqhop idm", "url": "https://ice4.somafm.com/cliqhop-128-mp3" },
+    { "name": "SomaFM Dub Step Beyond", "url": "https://ice4.somafm.com/dubstep-128-mp3" }
   ],
   "kexp": [
     { "name": "KEXP 90.3 Seattle", "url": "https://kexp-mp3-128.streamguys1.com/kexp128.mp3" }

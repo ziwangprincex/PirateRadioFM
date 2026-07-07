@@ -97,7 +97,11 @@ export const tools: Tool[] = [
     description: "Set volume 0-100 (applies to radio; restarts the current stream).",
     schema: { type: "object", properties: { level: { type: "number", minimum: 0, maximum: 100 } }, required: ["level"] },
     handler: async (a) => {
-      now.volume = Math.max(0, Math.min(100, Math.round(Number(a.level))));
+      // Reject missing/non-numeric input up front: Number(undefined) is NaN, and
+      // NaN would flow into state.json (as null) and later into mpv's --volume.
+      const level = Number(a.level);
+      if (!Number.isFinite(level)) throw new Error("Give a volume 0-100, e.g. level=60.");
+      now.volume = Math.max(0, Math.min(100, Math.round(level)));
       if (now.source === "radio" && now.state === "playing" && now.genre)
         await radio.playGenre(now.genre, now.stationIndex);
       else if (now.source === "spotify" && now.state === "playing") {

@@ -57,16 +57,28 @@ export function loadState(): void {
 // on exit, all under one lock acquisition. This is what tool handlers should use
 // instead of loadState/mutate/saveState separately — that pattern lets a second
 // writer sneak in between load and save and lost-update fields it didn't touch.
+// Serialize withState callers WITHIN this process before touching the cross-
+// process lock. That lock waits by spinning with a synchronous sleep: if a
+// second in-process caller (the MCP server handling two tool calls at once)
+// entered the spin while the first was mid-await holding the lock, the spin
+// would block the event loop and the first could never finish — a self-
+// deadlock resolved only by the 30s lock steal.
+let inProcTail: Promise<unknown> = Promise.resolve();
+
 export async function withState<T>(fn: () => Promise<T> | T): Promise<T> {
   // Note the lock is held across the async fn — Spotify API calls can therefore
   // hold it for hundreds of ms. Alternatives (optimistic reload-on-save) are
   // more code for a tool where concurrent tool calls are rare. Keep it simple.
-  return withCrossProcessLock<Promise<T>>(stateLockPath, async () => {
-    loadStateUnlocked();
-    const out = await fn();
-    saveStateUnlocked();
-    return out;
-  });
+  const run = (): Promise<T> =>
+    withCrossProcessLock<Promise<T>>(stateLockPath, async () => {
+      loadStateUnlocked();
+      const out = await fn();
+      saveStateUnlocked();
+      return out;
+    });
+  const p = inProcTail.then(run, run);
+  inProcTail = p.catch(() => { /* next caller runs regardless */ });
+  return p;
 }
 
 // Internal read that the lock helper wraps. Also used by saveState so the
@@ -95,17 +107,19 @@ function loadStateUnlocked(): void {
     // Whole-file parse failure — reset to defaults and move on. This is rare
     // (atomic write should prevent truncation) but if it happens the alternative
     // is crashing every subsequent tool call.
-    process.stderr.write("pirate-radio: state.json unreadable, resetting to defaults\n");
+    process.stderr.write("radiohead: state.json unreadable, resetting to defaults\n");
     Object.assign(now, defaults);
     return;
   }
-  // Per-field: accept null (all fields except stationIndex/volume are nullable
-  // in effect) or a value of the expected primitive type; otherwise fall back
-  // to that field's default. Salvages good fields even when one is corrupt.
+  // Per-field: accept a value of the expected primitive type, or null only for
+  // fields whose default is null (source, genre, …). Non-nullable fields like
+  // volume/state must never load as null — a null volume would end up on mpv's
+  // command line. Anything else falls back to that field's default, salvaging
+  // good fields even when one is corrupt.
   const target = now as unknown as Record<string, unknown>;
   for (const key of Object.keys(defaults) as (keyof NowPlaying)[]) {
     const got = raw[key];
-    if (got === null || typeof got === fieldType[key]) target[key] = got;
+    if ((got === null && defaults[key] === null) || typeof got === fieldType[key]) target[key] = got;
     else target[key] = defaults[key];
   }
 }

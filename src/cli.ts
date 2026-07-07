@@ -21,7 +21,15 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const args = parseArgs(rest, tool.schema);
+  let args: Record<string, unknown>;
+  try {
+    args = parseArgs(rest, tool.schema);
+  } catch {
+    // Malformed JSON blob — report it like any other usage error instead of
+    // letting the raw SyntaxError stack trace hit the user.
+    console.error(`Error: could not parse arguments: ${rest.join(" ")}`);
+    process.exit(1);
+  }
 
   try {
     const out = await withState(() => tool.handler(args));

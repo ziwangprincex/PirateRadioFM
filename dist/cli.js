@@ -327,13 +327,18 @@ var defaults = {
   spotifyVerifier: null
 };
 var now = { ...defaults };
+var inProcTail = Promise.resolve();
 async function withState(fn) {
-  return withCrossProcessLock(stateLockPath, async () => {
+  const run = () => withCrossProcessLock(stateLockPath, async () => {
     loadStateUnlocked();
     const out = await fn();
     saveStateUnlocked();
     return out;
   });
+  const p = inProcTail.then(run, run);
+  inProcTail = p.catch(() => {
+  });
+  return p;
 }
 var fieldType = {
   state: "string",
@@ -351,14 +356,14 @@ function loadStateUnlocked() {
   try {
     raw = JSON.parse(readFileSync4(statePath, "utf8"));
   } catch {
-    process.stderr.write("pirate-radio: state.json unreadable, resetting to defaults\n");
+    process.stderr.write("radiohead: state.json unreadable, resetting to defaults\n");
     Object.assign(now, defaults);
     return;
   }
   const target = now;
   for (const key of Object.keys(defaults)) {
     const got = raw[key];
-    if (got === null || typeof got === fieldType[key]) target[key] = got;
+    if (got === null && defaults[key] === null || typeof got === fieldType[key]) target[key] = got;
     else target[key] = defaults[key];
   }
 }
@@ -404,7 +409,7 @@ var stations = {};
 try {
   stations = JSON.parse(readFileSync5(join4(here, "..", "data", "stations.json"), "utf8"));
 } catch (e) {
-  process.stderr.write(`pirate-radio: failed to load stations.json \u2014 ${e.message}
+  process.stderr.write(`radiohead: failed to load stations.json \u2014 ${e.message}
 `);
 }
 function all() {
@@ -680,13 +685,15 @@ async function playGenre(genre, index = 0) {
     } catch {
     }
   }
-  const st = stations2[g][index % stations2[g].length];
+  const len = stations2[g].length;
+  const i = (Math.trunc(index) % len + len) % len;
+  const st = stations2[g][i];
   play(st.url, now.volume);
   now.state = "playing";
   now.source = "radio";
   now.genre = g;
   now.stationName = st.name;
-  now.stationIndex = index % stations2[g].length;
+  now.stationIndex = i;
   return st;
 }
 async function next() {
@@ -801,7 +808,9 @@ ${describe()}`
     description: "Set volume 0-100 (applies to radio; restarts the current stream).",
     schema: { type: "object", properties: { level: { type: "number", minimum: 0, maximum: 100 } }, required: ["level"] },
     handler: async (a) => {
-      now.volume = Math.max(0, Math.min(100, Math.round(Number(a.level))));
+      const level = Number(a.level);
+      if (!Number.isFinite(level)) throw new Error("Give a volume 0-100, e.g. level=60.");
+      now.volume = Math.max(0, Math.min(100, Math.round(level)));
       if (now.source === "radio" && now.state === "playing" && now.genre)
         await playGenre(now.genre, now.stationIndex);
       else if (now.source === "spotify" && now.state === "playing") {
@@ -887,7 +896,13 @@ async function main() {
     console.error("Available: " + tools.map((t) => t.name).join(", "));
     process.exit(1);
   }
-  const args = parseArgs(rest, tool.schema);
+  let args;
+  try {
+    args = parseArgs(rest, tool.schema);
+  } catch {
+    console.error(`Error: could not parse arguments: ${rest.join(" ")}`);
+    process.exit(1);
+  }
   try {
     const out = await withState(() => tool.handler(args));
     process.stdout.write(out + "\n");

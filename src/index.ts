@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// pirate-radio MCP server. stdio transport — works with Claude Code, Codex, Hermes.
+// radiohead MCP server. stdio transport — works with Claude Code, Codex, OpenCode, Hermes.
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -22,12 +22,12 @@ loadState();
 // before we take over, so a new session never inherits a stuck stream.
 const prevAnchor = readAnchor();
 if (prevAnchor && anchorAlive(prevAnchor)) {
-  // Another pirate-radio MCP server is already running under a live session.
+  // Another radiohead MCP server is already running under a live session.
   // Sharing state.json / players.json / anchor.json across two of them causes
   // cross-session kills (each watchdog would eventually manage the other's
   // players). Better to fail loudly than to silently break both.
   process.stderr.write(
-    `pirate-radio: another server is already running (pid ${prevAnchor.pid}). ` +
+    `radiohead: another server is already running (pid ${prevAnchor.pid}). ` +
       `Refusing to start a second instance.\n`,
   );
   process.exit(2);
@@ -80,7 +80,7 @@ function armStdinClose(): void {
 }
 
 const server = new Server(
-  { name: "pirate-radio", version: "0.1.0" },
+  { name: "radiohead", version: "0.1.0" },
   { capabilities: { tools: {} } }
 );
 

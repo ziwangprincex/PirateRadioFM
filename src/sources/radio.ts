@@ -30,13 +30,17 @@ export async function playGenre(genre: string, index = 0): Promise<Station> {
   if (now.source === "spotify") {
     try { await spotify.pause(); } catch { /* best effort — network / not-logged-in */ }
   }
-  const st = stations[g][index % stations[g].length];
+  // Floor-mod, not JS %: a negative or fractional index (corrupt state.json,
+  // prev() underflow) must still land on a real station, not stations[-1].
+  const len = stations[g].length;
+  const i = ((Math.trunc(index) % len) + len) % len;
+  const st = stations[g][i];
   player.play(st.url, now.volume);
   now.state = "playing";
   now.source = "radio";
   now.genre = g;
   now.stationName = st.name;
-  now.stationIndex = index % stations[g].length;
+  now.stationIndex = i;
   return st;
 }
 

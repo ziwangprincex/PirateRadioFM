@@ -329,6 +329,7 @@ var defaults = {
   spotifyVerifier: null
 };
 var now = { ...defaults };
+var inProcTail = Promise.resolve();
 function readAnchor() {
   if (!existsSync2(anchorPath)) return null;
   try {
@@ -362,7 +363,7 @@ var stations = {};
 try {
   stations = JSON.parse(readFileSync5(join4(here, "..", "data", "stations.json"), "utf8"));
 } catch (e) {
-  process.stderr.write(`pirate-radio: failed to load stations.json \u2014 ${e.message}
+  process.stderr.write(`radiohead: failed to load stations.json \u2014 ${e.message}
 `);
 }
 function all() {
@@ -641,13 +642,15 @@ async function playGenre(genre, index = 0) {
     } catch {
     }
   }
-  const st = stations2[g][index % stations2[g].length];
+  const len = stations2[g].length;
+  const i = (Math.trunc(index) % len + len) % len;
+  const st = stations2[g][i];
   play(st.url, now.volume);
   now.state = "playing";
   now.source = "radio";
   now.genre = g;
   now.stationName = st.name;
-  now.stationIndex = index % stations2[g].length;
+  now.stationIndex = i;
   return st;
 }
 async function next() {
@@ -792,7 +795,9 @@ ${describe()}`
     description: "Set volume 0-100 (applies to radio; restarts the current stream).",
     schema: { type: "object", properties: { level: { type: "number", minimum: 0, maximum: 100 } }, required: ["level"] },
     handler: async (a) => {
-      now.volume = Math.max(0, Math.min(100, Math.round(Number(a.level))));
+      const level = Number(a.level);
+      if (!Number.isFinite(level)) throw new Error("Give a volume 0-100, e.g. level=60.");
+      now.volume = Math.max(0, Math.min(100, Math.round(level)));
       if (now.source === "radio" && now.state === "playing" && now.genre)
         await playGenre(now.genre, now.stationIndex);
       else if (now.source === "spotify" && now.state === "playing") {
