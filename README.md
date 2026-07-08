@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/banner.png" alt="PirateRadioFM — internet radio in your CLI" width="100%"></p>
+
 # PirateRadioFM
 
 Play internet radio from a CLI coding agent. Music stops automatically when
@@ -79,6 +81,8 @@ music does not stop when the session ends. Use `/stop`.
 | `/nts` | NTS London |
 | `/wwoz` | WWOZ New Orleans, jazz & blues |
 | `/paradise` | Radio Paradise |
+| `/npr` | NPR music stations — The Current, WXPN, KUTX, WFUV (`/next` cycles) |
+| `/hoer` | HÖR Berlin — live DJ stream when on air, latest set otherwise (needs `yt-dlp`) |
 
 ### Playback control
 
@@ -93,6 +97,19 @@ music does not stop when the session ends. Use `/stop`.
 | `/volume <0-100>` | Set volume |
 | `/now-playing` | Show what's playing |
 
-`/nts` and `/paradise` have several channels; `/next` cycles through them.
+`/nts`, `/paradise`, and `/npr` have several channels; `/next` cycles through them.
+
+### Podcasts & streaming
+
+| Command | What it does |
+|---|---|
+| `/podcast <name-or-rss-url>` | Play a podcast's newest episode (searched on iTunes, no login); `/next`/`/prev` step through episodes |
+| `/music <name>` | Play a playlist/song/album from your Apple Music library (macOS only) |
+| `/spotify-play <anything>` | Play a track/album/playlist/show on your Spotify client (Premium + setup) |
+| `/spotify-search <query>` | Search the Spotify catalog |
+| `/spotify-devices` / `/spotify-device <name>` | List Spotify devices / move playback |
+
+Spotify needs a one-time setup (developer app + login); details and limits for
+all three sources are in [docs/sources.md](./docs/sources.md).
 
 Plain language also works: "play some jazz", "switch station", "stop the music".

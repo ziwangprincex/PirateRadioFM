@@ -80,7 +80,7 @@ function armStdinClose(): void {
 }
 
 const server = new Server(
-  { name: "radiohead", version: "0.1.0" },
+  { name: "radiohead", version: "0.2.0" },
   { capabilities: { tools: {} } }
 );
 

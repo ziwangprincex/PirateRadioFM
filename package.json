@@ -1,7 +1,7 @@
 {
   "name": "pirate-radio",
-  "version": "0.1.0",
-  "description": "Radio + Spotify MCP server for CLI coding agents — built-in genre stations, auto-stops when your session ends.",
+  "version": "0.2.0",
+  "description": "Radio + Spotify + podcasts + Apple Music MCP server for CLI coding agents — built-in genre stations, auto-stops when your session ends.",
   "type": "module",
   "bin": {
     "pirate-radio": "dist/index.js"

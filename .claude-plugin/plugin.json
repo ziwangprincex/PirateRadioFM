@@ -1,7 +1,7 @@
 {
   "name": "radiohead",
-  "version": "0.1.0",
-  "description": "Radio + Spotify for Claude Code. Auto-stops when your session ends.",
+  "version": "0.2.0",
+  "description": "Radio + Spotify + podcasts + Apple Music for Claude Code. Auto-stops when your session ends.",
   "author": {
     "name": "princewwang"
   },

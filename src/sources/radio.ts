@@ -1,6 +1,7 @@
 // Radio source: picks/rotates stations from the shared station list, drives the player.
 import * as player from "../player.js";
 import * as spotify from "./spotify.js";
+import * as applemusic from "./applemusic.js";
 import { now } from "../state.js";
 import { all, genres as allGenres, type Station } from "../stations.js";
 
@@ -24,12 +25,13 @@ function normalize(genre: string): string | null {
 export async function playGenre(genre: string, index = 0): Promise<Station> {
   const g = normalize(genre);
   if (!g) throw new Error(`Unknown genre "${genre}". Available: ${genres().join(", ")}`);
-  // If we were on Spotify, silence it before starting the local stream — otherwise
-  // both would play simultaneously (Spotify runs on its own Connect device, our
-  // player.stop() only kills local mpv/ffplay).
+  // If we were on a remote source (Spotify Connect, Music.app), silence it
+  // before starting the local stream — otherwise both would play simultaneously
+  // (they run in their own apps; our player.stop() only kills local mpv/ffplay).
   if (now.source === "spotify") {
     try { await spotify.pause(); } catch { /* best effort — network / not-logged-in */ }
   }
+  if (now.source === "applemusic") applemusic.pauseIfRunning();
   // Floor-mod, not JS %: a negative or fractional index (corrupt state.json,
   // prev() underflow) must still land on a real station, not stations[-1].
   const len = stations[g].length;

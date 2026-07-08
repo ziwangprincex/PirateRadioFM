@@ -54,6 +54,12 @@
   "kexp": [
     { "name": "KEXP 90.3 Seattle", "url": "https://kexp-mp3-128.streamguys1.com/kexp128.mp3" }
   ],
+  "npr": [
+    { "name": "The Current 89.3 (Minnesota Public Radio)", "url": "https://current.stream.publicradio.org/current.mp3" },
+    { "name": "WXPN 88.5 Philadelphia", "url": "https://wxpnhi.xpn.org/xpnhi" },
+    { "name": "KUTX 98.9 Austin", "url": "https://streams.kut.org/4428_192.mp3" },
+    { "name": "WFUV 90.7 New York", "url": "https://onair.wfuv.org/onair-aacplus" }
+  ],
   "kcrw": [
     { "name": "KCRW Eclectic24", "url": "https://streams.kcrw.com/e24_mp3" }
   ],

@@ -8,12 +8,14 @@ import * as player from "./player.js";
 import { hosts } from "./stations.js";
 import { parseArgs } from "./argparse.js";
 import { tools } from "./tools.js";
+import { parseFeed, embeddedDirectUrl } from "./sources/podcast.js";
+import { escapeAS } from "./sources/applemusic.js";
 
 // --- station data ----------------------------------------------------------
 const expected = [
   "jazz", "classical", "indie", "rock", "country", "pop",
   "ambient", "lofi", "soul", "eighties", "world", "house", "techno",
-  "kexp", "kcrw", "wfmu", "nts", "wwoz", "paradise",
+  "kexp", "kcrw", "wfmu", "nts", "wwoz", "paradise", "npr",
 ];
 const got = radio.genres();
 for (const g of expected) assert.ok(got.includes(g), `missing genre: ${g}`);
@@ -37,10 +39,48 @@ for (const required of [
   "radio_list", "radio_play", "radio_next", "radio_prev", "radio_pause",
   "radio_resume", "radio_stop", "radio_now_playing", "radio_volume",
   "spotify_login", "spotify_complete_login", "spotify_list_playlists",
-  "spotify_play_playlist",
+  "spotify_play_playlist", "spotify_search", "spotify_devices", "spotify_transfer",
+  "podcast_play", "music_play", "hoer_play",
 ]) {
   assert.ok(toolNames.has(required), `tool missing: ${required}`);
 }
+
+// --- podcast feed parsing ----------------------------------------------------
+// CDATA title, entity-encoded title, single-quoted enclosure url, and an item
+// with no enclosure (must be skipped). Channel title must not leak from items.
+const feed = `<?xml version="1.0"?><rss><channel>
+  <title>My &amp; Show</title>
+  <item><title><![CDATA[Ep 2 — latest]]></title>
+    <enclosure url="https://cdn.example.com/ep2.mp3" type="audio/mpeg"/></item>
+  <item><title>Announcement only</title></item>
+  <item><title>Ep 1 &quot;pilot&quot;</title>
+    <enclosure url='https://cdn.example.com/ep1.mp3' type="audio/mpeg"/></item>
+</channel></rss>`;
+const parsed = parseFeed(feed);
+assert.strictEqual(parsed.channel, "My & Show");
+assert.strictEqual(parsed.episodes.length, 2);
+assert.strictEqual(parsed.episodes[0].title, "Ep 2 — latest");
+assert.strictEqual(parsed.episodes[0].url, "https://cdn.example.com/ep2.mp3");
+assert.strictEqual(parsed.episodes[1].title, 'Ep 1 "pilot"');
+assert.strictEqual(parsed.episodes[1].url, "https://cdn.example.com/ep1.mp3");
+assert.deepStrictEqual(parseFeed("<rss><channel><title>empty</title></channel></rss>").episodes, []);
+
+// --- AppleScript string escaping ----------------------------------------------
+assert.strictEqual(escapeAS(`My "Best" Mix\\2024`), `My \\"Best\\" Mix\\\\2024`);
+
+// --- tracking-chain de-wrapping -------------------------------------------------
+// swap.fm-style chain: take the LAST embedded hostname, keep the tail + query.
+assert.strictEqual(
+  embeddedDirectUrl("https://tracking.swap.fm/track/xyz/rss.swap.fm/feeds.megaphone.fm/CNE1/traffic.megaphone.fm/CNE2.mp3"),
+  "https://traffic.megaphone.fm/CNE2.mp3",
+);
+// podtrac-style: "redirect.mp3" must not count as a hostname; query survives.
+assert.strictEqual(
+  embeddedDirectUrl("https://mgln.ai/e/2/dts.podtrac.com/redirect.mp3/cdn.simplecastaudio.com/ep/audio.mp3?aid=rss&feed=x"),
+  "https://cdn.simplecastaudio.com/ep/audio.mp3?aid=rss&feed=x",
+);
+// plain direct URL: nothing embedded → null.
+assert.strictEqual(embeddedDirectUrl("https://cdn.example.com/episodes/42.mp3"), null);
 
 // --- argparse: number coercion only when schema says so --------------------
 const numSchema = { type: "object", properties: { level: { type: "number" } } };

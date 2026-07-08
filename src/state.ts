@@ -11,7 +11,7 @@ import { livePlayerCountUnlocked } from "./registry.js";
 import { withCrossProcessLock } from "./lock.js";
 
 export type PlayState = "stopped" | "playing" | "paused";
-export type Source = "radio" | "spotify";
+export type Source = "radio" | "spotify" | "podcast" | "applemusic" | "hoer";
 
 export interface NowPlaying {
   state: PlayState;
@@ -22,6 +22,9 @@ export interface NowPlaying {
   title: string | null;
   volume: number;
   spotifyVerifier: string | null; // PKCE verifier held between /spotify-login and /spotify-complete
+  podcastFeed: string | null;     // RSS feed URL of the current podcast
+  podcastName: string | null;     // podcast (channel) display name
+  episodeIndex: number;           // 0 = newest episode in the feed
 }
 
 const stateDir = join(homedir(), ".pirate-radio");
@@ -43,6 +46,9 @@ const defaults: NowPlaying = {
   title: null,
   volume: 80,
   spotifyVerifier: null,
+  podcastFeed: null,
+  podcastName: null,
+  episodeIndex: 0,
 };
 
 // Mutable proxy of the on-disk state. tools.ts writes to this via `now.x = y`,
@@ -96,6 +102,9 @@ const fieldType: Record<keyof NowPlaying, "string" | "number"> = {
   title: "string",
   volume: "number",
   spotifyVerifier: "string",
+  podcastFeed: "string",
+  podcastName: "string",
+  episodeIndex: "number",
 };
 
 function loadStateUnlocked(): void {
@@ -180,16 +189,24 @@ export function clearAnchor(): void {
 
 export function describe(): string {
   if (now.state === "stopped") return "Stopped.";
-  // Reconcile with reality for the local radio path: if the mpv/ffplay we
-  // recorded is dead (crashed, OOM, user-kill), the on-disk state still says
-  // "playing" until the next explicit stop/play. Show that honestly. We don't
-  // do this for Spotify — its "device" is remote and we'd need an API call.
-  if (now.source === "radio" && now.state === "playing" && livePlayerCountUnlocked() === 0) {
+  // Reconcile with reality for the local-player paths (radio, podcast): if the
+  // mpv/ffplay we recorded is dead (crashed, OOM, user-kill), the on-disk state
+  // still says "playing" until the next explicit stop/play. Show that honestly.
+  // We don't do this for Spotify/Apple Music — their players are remote apps
+  // and we'd need an API/osascript call.
+  const localSource = now.source === "radio" || now.source === "podcast" || now.source === "hoer";
+  if (localSource && now.state === "playing" && livePlayerCountUnlocked() === 0) {
     return "Stopped (player exited unexpectedly).";
   }
   const what =
     now.source === "radio"
       ? `${now.genre} radio — ${now.stationName}`
-      : `Spotify — ${now.title ?? "(unknown)"}`;
+      : now.source === "podcast"
+        ? `Podcast ${now.podcastName ?? "(unknown)"} — ${now.title ?? "(unknown)"}`
+        : now.source === "hoer"
+          ? `HÖR Berlin — ${now.title ?? "(unknown)"}`
+          : now.source === "applemusic"
+            ? `Apple Music — ${now.title ?? "(unknown)"}`
+            : `Spotify — ${now.title ?? "(unknown)"}`;
   return `${now.state === "paused" ? "Paused" : "Playing"}: ${what} (vol ${now.volume})`;
 }

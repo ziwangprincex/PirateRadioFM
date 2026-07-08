@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { now, readAnchor, anchorAlive } from "./state.js";
 import { hosts } from "./stations.js";
+import { dynamicHosts } from "./dynhosts.js";
 import { killPid, findOrphanPlayers } from "./proc.js";
 import {
   addPlayer,
@@ -71,8 +72,9 @@ export function stop(): void {
 // The safety net. Find any mpv/ffplay whose command line references one of our
 // stream hosts and kill it — this is what catches players that the registry
 // lost track of (the original "music keeps playing after terminal close" bug).
+// dynamicHosts() covers podcast episode CDNs, which aren't in stations.json.
 function sweepOrphans(): void {
-  for (const pid of findOrphanPlayers(hosts())) killPid(pid);
+  for (const pid of findOrphanPlayers([...hosts(), ...dynamicHosts()])) killPid(pid);
 }
 
 const here = dirname(fileURLToPath(import.meta.url));

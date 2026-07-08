@@ -3230,8 +3230,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path) {
-      let input = path;
+    function removeDotSegments(path2) {
+      let input = path2;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3483,8 +3483,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path && path !== "/" ? path : void 0;
+        const [path2, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path2 && path2 !== "/" ? path2 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -7130,10 +7130,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path) {
-  if (!path)
+function getElementAtPath(obj, path2) {
+  if (!path2)
     return obj;
-  return path.reduce((acc, key) => acc?.[key], obj);
+  return path2.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -7542,11 +7542,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path, issues) {
+function prefixIssues(path2, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path);
+    iss.path.unshift(path2);
     return iss;
   });
 }
@@ -7693,16 +7693,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path = []) => {
+  const processError = (error3, path2 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path2, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path2, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path2, ...issue2.path]);
       } else {
-        const fullpath = [...path, ...issue2.path];
+        const fullpath = [...path2, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -9712,12 +9712,12 @@ var $ZodPipe = /* @__PURE__ */ $constructor("$ZodPipe", (inst, def) => {
     return handlePipeResult(left, def.out, ctx);
   };
 });
-function handlePipeResult(left, next2, ctx) {
+function handlePipeResult(left, next4, ctx) {
   if (left.issues.length) {
     left.aborted = true;
     return left;
   }
-  return next2._zod.run({ value: left.value, issues: left.issues, fallback: left.fallback }, ctx);
+  return next4._zod.run({ value: left.value, issues: left.issues, fallback: left.fallback }, ctx);
 }
 var $ZodPreprocess = /* @__PURE__ */ $constructor("$ZodPreprocess", (inst, def) => {
   $ZodPipe.init(inst, def);
@@ -15453,7 +15453,7 @@ var StdioServerTransport = class {
 // src/player.ts
 import { spawn, execFileSync as execFileSync2 } from "node:child_process";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
-import { dirname as dirname3, join as join5 } from "node:path";
+import { dirname as dirname3, join as join6 } from "node:path";
 
 // src/state.ts
 import { readFileSync as readFileSync4, writeFileSync as writeFileSync3, renameSync as renameSync2, mkdirSync as mkdirSync3, existsSync as existsSync2, unlinkSync } from "node:fs";
@@ -15773,7 +15773,10 @@ var defaults = {
   stationIndex: 0,
   title: null,
   volume: 80,
-  spotifyVerifier: null
+  spotifyVerifier: null,
+  podcastFeed: null,
+  podcastName: null,
+  episodeIndex: 0
 };
 var now = { ...defaults };
 function loadState() {
@@ -15800,7 +15803,10 @@ var fieldType = {
   stationIndex: "number",
   title: "string",
   volume: "number",
-  spotifyVerifier: "string"
+  spotifyVerifier: "string",
+  podcastFeed: "string",
+  podcastName: "string",
+  episodeIndex: "number"
 };
 function loadStateUnlocked() {
   if (!existsSync2(statePath)) return;
@@ -15858,10 +15864,11 @@ function clearAnchor() {
 }
 function describe2() {
   if (now.state === "stopped") return "Stopped.";
-  if (now.source === "radio" && now.state === "playing" && livePlayerCountUnlocked() === 0) {
+  const localSource = now.source === "radio" || now.source === "podcast" || now.source === "hoer";
+  if (localSource && now.state === "playing" && livePlayerCountUnlocked() === 0) {
     return "Stopped (player exited unexpectedly).";
   }
-  const what = now.source === "radio" ? `${now.genre} radio \u2014 ${now.stationName}` : `Spotify \u2014 ${now.title ?? "(unknown)"}`;
+  const what = now.source === "radio" ? `${now.genre} radio \u2014 ${now.stationName}` : now.source === "podcast" ? `Podcast ${now.podcastName ?? "(unknown)"} \u2014 ${now.title ?? "(unknown)"}` : now.source === "hoer" ? `H\xD6R Berlin \u2014 ${now.title ?? "(unknown)"}` : now.source === "applemusic" ? `Apple Music \u2014 ${now.title ?? "(unknown)"}` : `Spotify \u2014 ${now.title ?? "(unknown)"}`;
   return `${now.state === "paused" ? "Paused" : "Playing"}: ${what} (vol ${now.volume})`;
 }
 
@@ -15899,6 +15906,35 @@ function hosts() {
   return hostCache;
 }
 
+// src/dynhosts.ts
+import { readFileSync as readFileSync6, writeFileSync as writeFileSync4, renameSync as renameSync3, mkdirSync as mkdirSync4, existsSync as existsSync3 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { join as join5 } from "node:path";
+var dir2 = join5(homedir3(), ".pirate-radio");
+var path = join5(dir2, "dynamic-hosts.json");
+var CAP = 20;
+function dynamicHosts() {
+  if (!existsSync3(path)) return [];
+  try {
+    const arr = JSON.parse(readFileSync6(path, "utf8"));
+    return Array.isArray(arr) ? arr.filter((h) => typeof h === "string") : [];
+  } catch {
+    return [];
+  }
+}
+function rememberHost(host) {
+  const h = host.toLowerCase();
+  if (!h) return;
+  try {
+    const next4 = [h, ...dynamicHosts().filter((x) => x !== h)].slice(0, CAP);
+    mkdirSync4(dir2, { recursive: true });
+    const tmp = `${path}.${process.pid}.tmp`;
+    writeFileSync4(tmp, JSON.stringify(next4, null, 2));
+    renameSync3(tmp, path);
+  } catch {
+  }
+}
+
 // src/player.ts
 var detected;
 function detect() {
@@ -15927,7 +15963,7 @@ function stop() {
   sweepOrphans();
 }
 function sweepOrphans() {
-  for (const pid of findOrphanPlayers(hosts())) killPid(pid);
+  for (const pid of findOrphanPlayers([...hosts(), ...dynamicHosts()])) killPid(pid);
 }
 var here2 = dirname3(fileURLToPath2(import.meta.url));
 function play(url, volume) {
@@ -15956,7 +15992,7 @@ function spawnWatchdog(playerPid) {
   const wd = spawn(
     process.execPath,
     [
-      join5(here2, "watchdog.js"),
+      join6(here2, "watchdog.js"),
       String(anchor.pid),
       anchor.token ?? "",
       String(playerPid)
@@ -15973,16 +16009,16 @@ function spawnWatchdog(playerPid) {
 }
 
 // src/sources/spotify.ts
-import { readFileSync as readFileSync6, writeFileSync as writeFileSync4, mkdirSync as mkdirSync4, existsSync as existsSync3 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import { join as join6 } from "node:path";
+import { readFileSync as readFileSync7, writeFileSync as writeFileSync5, mkdirSync as mkdirSync5, existsSync as existsSync4 } from "node:fs";
+import { homedir as homedir4 } from "node:os";
+import { join as join7 } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 var API = "https://api.spotify.com/v1";
 var AUTH = "https://accounts.spotify.com";
 var REDIRECT = "http://127.0.0.1:8888/callback";
 var SCOPES = "user-read-playback-state user-modify-playback-state playlist-read-private";
-var cfgDir = join6(homedir3(), ".pirate-radio");
-var tokenPath = join6(cfgDir, "spotify.json");
+var cfgDir = join7(homedir4(), ".pirate-radio");
+var tokenPath = join7(cfgDir, "spotify.json");
 function clientId() {
   const id = process.env.SPOTIFY_CLIENT_ID;
   if (!id) throw new Error("Set SPOTIFY_CLIENT_ID (from your Spotify developer app) to use Spotify.");
@@ -15992,16 +16028,16 @@ function b64url(buf) {
   return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 function loadTokens() {
-  if (!existsSync3(tokenPath)) return null;
+  if (!existsSync4(tokenPath)) return null;
   try {
-    return JSON.parse(readFileSync6(tokenPath, "utf8"));
+    return JSON.parse(readFileSync7(tokenPath, "utf8"));
   } catch {
     return null;
   }
 }
 function saveTokens(t) {
-  mkdirSync4(cfgDir, { recursive: true });
-  writeFileSync4(tokenPath, JSON.stringify(t, null, 2), { mode: 384 });
+  mkdirSync5(cfgDir, { recursive: true });
+  writeFileSync5(tokenPath, JSON.stringify(t, null, 2), { mode: 384 });
 }
 function loginUrl() {
   const v = b64url(randomBytes(48));
@@ -16059,30 +16095,35 @@ async function accessToken() {
       if (!r.ok) throw new Error(`Token refresh failed: ${await r.text()}`);
       const j = await r.json();
       const ttl = Number(j.expires_in) || 3600;
-      const next2 = { access_token: j.access_token, refresh_token: j.refresh_token ?? t.refresh_token, expires_at: Date.now() + ttl * 1e3 };
-      saveTokens(next2);
-      return next2.access_token;
+      const next4 = { access_token: j.access_token, refresh_token: j.refresh_token ?? t.refresh_token, expires_at: Date.now() + ttl * 1e3 };
+      saveTokens(next4);
+      return next4.access_token;
     } finally {
       refreshInFlight = null;
     }
   })();
   return refreshInFlight;
 }
-async function api(path, init) {
+async function api(path2, init) {
   const tok = await accessToken();
-  const r = await fetch(`${API}${path}`, {
+  const r = await fetch(`${API}${path2}`, {
     ...init,
     headers: { ...init?.headers ?? {}, Authorization: `Bearer ${tok}` }
   });
   if (r.status === 404)
-    throw new Error("No active Spotify device found. Open the Spotify app (Premium required) and play something once, then retry.");
+    throw statusError(404, "No active Spotify device found. Open the Spotify app (Premium required) and play something once, then retry \u2014 or use spotify_devices.");
   if (r.status === 403)
-    throw new Error("Spotify refused the command. Premium is required for playback control.");
+    throw statusError(403, "Spotify refused the command. Premium is required for playback control.");
   if (!r.ok) {
     const body = await r.text().catch(() => "");
-    throw new Error(`Spotify API ${r.status}: ${body.slice(0, 200) || r.statusText}`);
+    throw statusError(r.status, `Spotify API ${r.status}: ${body.slice(0, 200) || r.statusText}`);
   }
   return r;
+}
+function statusError(status, message) {
+  const e = new Error(message);
+  e.status = status;
+  return e;
 }
 async function listPlaylists() {
   const r = await api("/me/playlists?limit=20");
@@ -16090,27 +16131,136 @@ async function listPlaylists() {
   const items = (j.items ?? []).map((p) => `\u2022 ${p.name}  [${p.uri}]`);
   return items.length ? items.join("\n") : "No playlists found.";
 }
+var SEARCH_TYPES = ["track", "album", "artist", "playlist", "show", "episode"];
+function fmtHit(t, x) {
+  const by = t === "track" || t === "album" ? ` \u2014 ${(x.artists ?? []).map((a) => a.name).join(", ")}` : t === "playlist" ? ` \u2014 by ${x.owner?.display_name ?? "?"}` : t === "show" ? ` \u2014 ${x.publisher ?? "?"}` : "";
+  return `\u2022 ${x.name}${by}  [${x.uri}]`;
+}
+async function search(query, types) {
+  const wanted = (types ?? "track,album,playlist,show").split(",").map((t) => t.trim().toLowerCase()).filter((t) => SEARCH_TYPES.includes(t));
+  if (wanted.length === 0)
+    throw new Error(`No valid search type. Use a comma list of: ${SEARCH_TYPES.join(", ")}`);
+  const p = new URLSearchParams({ q: query, type: wanted.join(","), limit: "5" });
+  const r = await api(`/search?${p}`);
+  const j = await r.json();
+  const out = [];
+  for (const t of wanted) {
+    const items = (j[`${t}s`]?.items ?? []).filter(Boolean);
+    if (items.length === 0) continue;
+    out.push(`${t.toUpperCase()}S`, ...items.map((x) => fmtHit(t, x)));
+  }
+  return out.length ? out.join("\n") : `No results for "${query}".`;
+}
+async function searchBest(query) {
+  const p = new URLSearchParams({ q: query, type: "track,album,playlist,show", limit: "1" });
+  const r = await api(`/search?${p}`);
+  const j = await r.json();
+  for (const t of ["track", "album", "playlist", "show"]) {
+    const hit = (j[`${t}s`]?.items ?? []).filter(Boolean)[0];
+    if (hit) return { uri: hit.uri, name: `${hit.name}${hit.artists ? ` \u2014 ${hit.artists.map((a) => a.name).join(", ")}` : ""}` };
+  }
+  return null;
+}
+async function deviceList() {
+  const r = await api("/me/player/devices");
+  const j = await r.json();
+  return (j.devices ?? []).filter((d) => d.id);
+}
+async function devices() {
+  const ds = await deviceList();
+  if (ds.length === 0)
+    return "No Spotify devices online. Open Spotify on your computer/phone, then retry.";
+  return ds.map((d) => `${d.is_active ? "> " : "\u2022 "}${d.name} (${d.type})  [${d.id}]`).join("\n");
+}
+async function transfer(nameOrId) {
+  const ds = await deviceList();
+  const q = nameOrId.trim().toLowerCase();
+  const hit = ds.find((d) => d.id === nameOrId) ?? ds.find((d) => d.name.toLowerCase().includes(q));
+  if (!hit) {
+    const names = ds.map((d) => d.name).join(", ") || "(none online)";
+    throw new Error(`No device matching "${nameOrId}". Online: ${names}`);
+  }
+  await api("/me/player", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ device_ids: [hit.id], play: true })
+  });
+  return `Playback moved to ${hit.name}.`;
+}
+async function nowPlayingLine() {
+  const r = await api("/me/player");
+  if (r.status === 204) return "Spotify: nothing playing.";
+  const j = await r.json();
+  const item = j.item;
+  if (!item) return "Spotify: nothing playing.";
+  const who = (item.artists ?? []).map((a) => a.name).join(", ") || item.show?.name || "";
+  const t = (ms) => `${Math.floor(ms / 6e4)}:${String(Math.floor(ms % 6e4 / 1e3)).padStart(2, "0")}`;
+  const pos = Number.isFinite(j.progress_ms) && Number.isFinite(item.duration_ms) ? ` (${t(j.progress_ms)}/${t(item.duration_ms)})` : "";
+  return `${j.is_playing ? "Playing" : "Paused"}: ${item.name}${who ? ` \u2014 ${who}` : ""}${pos} on ${j.device?.name ?? "?"}`;
+}
+function urlToUri(s) {
+  const m = s.match(/^https?:\/\/open\.spotify\.com\/(?:intl-[a-z-]+\/)?(track|album|playlist|artist|show|episode)\/([A-Za-z0-9]+)/i);
+  return m ? `spotify:${m[1].toLowerCase()}:${m[2]}` : s;
+}
+function playBody(uri) {
+  return /^spotify:(track|episode):/.test(uri) ? JSON.stringify({ uris: [uri] }) : JSON.stringify({ context_uri: uri });
+}
 async function playContext(uriOrName) {
-  let uri = uriOrName;
+  let uri = urlToUri(uriOrName.trim());
   let displayName = uriOrName;
   if (!uri.startsWith("spotify:")) {
     const r = await api("/me/playlists?limit=50");
     const j = await r.json();
     const hit = (j.items ?? []).find((p) => p.name.toLowerCase() === uriOrName.toLowerCase());
-    if (!hit) throw new Error(`No playlist named "${uriOrName}". Use spotify_list_playlists.`);
-    uri = hit.uri;
-    displayName = hit.name;
+    if (hit) {
+      uri = hit.uri;
+      displayName = hit.name;
+    } else {
+      const best = await searchBest(uriOrName);
+      if (!best) throw new Error(`Nothing on Spotify matches "${uriOrName}". Try spotify_search.`);
+      uri = best.uri;
+      displayName = best.name;
+    }
   }
-  await api("/me/player/play", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ context_uri: uri })
-  });
+  await playWithRecovery(playBody(uri));
   stop();
   now.state = "playing";
   now.source = "spotify";
   now.title = displayName;
   return `Playing ${displayName} on your Spotify device.`;
+}
+async function playWithRecovery(body) {
+  const put = (device) => api(`/me/player/play${device ? `?device_id=${device}` : ""}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body
+  });
+  try {
+    await put();
+  } catch (e) {
+    if (e.status !== 404 || process.platform !== "darwin") throw e;
+    const id = await launchAndWaitForDevice();
+    if (!id) throw e;
+    await put(id);
+  }
+}
+async function launchAndWaitForDevice() {
+  try {
+    const { execFileSync: execFileSync5 } = await import("node:child_process");
+    execFileSync5("open", ["-a", "Spotify"], { stdio: "ignore", timeout: 8e3 });
+  } catch {
+    return null;
+  }
+  for (let i = 0; i < 6; i++) {
+    await new Promise((res) => setTimeout(res, 2e3));
+    try {
+      const ds = await deviceList();
+      const d = ds.find((x) => x.type.toLowerCase() === "computer") ?? ds[0];
+      if (d) return d.id;
+    } catch {
+    }
+  }
+  return null;
 }
 async function pause() {
   await api("/me/player/pause", { method: "PUT" });
@@ -16127,6 +16277,98 @@ async function skipPrev() {
 async function setVolume(percent) {
   const p = Math.max(0, Math.min(100, Math.round(percent)));
   await api(`/me/player/volume?volume_percent=${p}`, { method: "PUT" });
+}
+
+// src/sources/applemusic.ts
+import { execFileSync as execFileSync3 } from "node:child_process";
+function assertMac() {
+  if (process.platform !== "darwin")
+    throw new Error("Apple Music control requires macOS (it drives the local Music.app via AppleScript).");
+}
+function escapeAS(s) {
+  return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+function osa(script) {
+  return execFileSync3("osascript", ["-e", script], {
+    encoding: "utf8",
+    timeout: 15e3,
+    windowsHide: true
+  }).trim();
+}
+async function play2(target) {
+  assertMac();
+  const t = escapeAS(target.trim());
+  if (!t) throw new Error("Give me a playlist, song, or album name from your Music library.");
+  stop();
+  if (now.source === "spotify") {
+    try {
+      await pause();
+    } catch {
+    }
+  }
+  const attempts = [
+    { script: `tell application "Music" to play playlist "${t}"`, kind: "playlist" },
+    { script: `tell application "Music" to play (first track of library playlist 1 whose name contains "${t}")`, kind: "track" },
+    { script: `tell application "Music" to play (first track of library playlist 1 whose album contains "${t}")`, kind: "album" }
+  ];
+  let played = null;
+  for (const a of attempts) {
+    try {
+      osa(a.script);
+      played = a.kind;
+      break;
+    } catch {
+    }
+  }
+  if (!played)
+    throw new Error(
+      `Nothing in your Music library matches "${target}". AppleScript can only play what's already in the library \u2014 add it in Music.app first.`
+    );
+  let title = target;
+  try {
+    title = nowPlayingLine2();
+  } catch {
+  }
+  now.state = "playing";
+  now.source = "applemusic";
+  now.title = title;
+  return `> Apple Music (${played}): ${title}`;
+}
+function pauseIfRunning() {
+  if (process.platform !== "darwin") return;
+  try {
+    osa(`if application "Music" is running then tell application "Music" to pause`);
+  } catch {
+  }
+}
+function pause2() {
+  assertMac();
+  osa(`tell application "Music" to pause`);
+}
+function resume2() {
+  assertMac();
+  osa(`tell application "Music" to play`);
+}
+function stop2() {
+  assertMac();
+  osa(`tell application "Music" to stop`);
+}
+function next() {
+  assertMac();
+  osa(`tell application "Music" to next track`);
+}
+function prev() {
+  assertMac();
+  osa(`tell application "Music" to previous track`);
+}
+function setVolume2(percent) {
+  assertMac();
+  const p = Math.max(0, Math.min(100, Math.round(percent)));
+  osa(`tell application "Music" to set sound volume to ${p}`);
+}
+function nowPlayingLine2() {
+  assertMac();
+  return osa(`tell application "Music" to (get name of current track) & " \u2014 " & (get artist of current track)`);
 }
 
 // src/sources/radio.ts
@@ -16150,6 +16392,7 @@ async function playGenre(genre, index = 0) {
     } catch {
     }
   }
+  if (now.source === "applemusic") pauseIfRunning();
   const len = stations2[g].length;
   const i = (Math.trunc(index) % len + len) % len;
   const st = stations2[g][i];
@@ -16161,16 +16404,203 @@ async function playGenre(genre, index = 0) {
   now.stationIndex = i;
   return st;
 }
-async function next() {
+async function next2() {
   if (now.source !== "radio" || !now.genre)
     throw new Error("No radio station is playing.");
   return playGenre(now.genre, now.stationIndex + 1);
 }
-async function prev() {
+async function prev2() {
   if (now.source !== "radio" || !now.genre)
     throw new Error("No radio station is playing.");
   const len = stations2[now.genre].length;
   return playGenre(now.genre, (now.stationIndex - 1 + len) % len);
+}
+
+// src/sources/podcast.ts
+var MAX_EPISODES = 50;
+function decodeEntities(s) {
+  return s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#0*39;|&apos;/g, "'");
+}
+function textOf(block, tag) {
+  const m = block.match(new RegExp(`<${tag}[^>]*>\\s*(?:<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>|([\\s\\S]*?))\\s*</${tag}>`, "i"));
+  if (!m) return null;
+  const raw = (m[1] ?? m[2] ?? "").trim();
+  return raw ? decodeEntities(raw) : null;
+}
+function parseFeed(xml) {
+  const episodes = [];
+  const items = xml.match(/<item[\s>][\s\S]*?<\/item>/gi) ?? [];
+  for (const item of items) {
+    const enc = item.match(/<enclosure\b[^>]*\burl\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
+    const url = enc?.[1] ?? enc?.[2];
+    if (!url) continue;
+    episodes.push({ title: textOf(item, "title") ?? "(untitled episode)", url: decodeEntities(url) });
+    if (episodes.length >= MAX_EPISODES) break;
+  }
+  const head = items.length ? xml.slice(0, xml.search(/<item[\s>]/i)) : xml;
+  return { channel: textOf(head, "title"), episodes };
+}
+async function fetchText(url) {
+  const r = await fetch(url, { redirect: "follow" });
+  if (!r.ok) throw new Error(`Fetch failed (${r.status}) for ${url}`);
+  return r.text();
+}
+function embeddedDirectUrl(url) {
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    return null;
+  }
+  const seg = u.pathname.split("/").filter(Boolean);
+  for (let i = seg.length - 2; i >= 0; i--) {
+    if (/^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/i.test(seg[i])) {
+      return `https://${seg.slice(i).join("/")}${u.search}`;
+    }
+  }
+  return null;
+}
+async function probe(url) {
+  try {
+    const r = await fetch(url, {
+      redirect: "follow",
+      headers: { Range: "bytes=0-0", "User-Agent": "Mozilla/5.0" }
+    });
+    try {
+      await r.body?.cancel();
+    } catch {
+    }
+    return r.ok ? url : null;
+  } catch {
+    return null;
+  }
+}
+async function resolveDirect(url) {
+  const direct = embeddedDirectUrl(url);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (direct && await probe(direct)) return direct;
+    if (await probe(url)) return url;
+    await new Promise((res) => setTimeout(res, 300));
+  }
+  return url;
+}
+async function resolveFeed(target) {
+  const t = target.trim();
+  if (/^https?:\/\//i.test(t)) return { feedUrl: t, name: null };
+  const q = new URLSearchParams({ media: "podcast", limit: "5", term: t });
+  const j = JSON.parse(await fetchText(`https://itunes.apple.com/search?${q}`));
+  const hit = (j.results ?? []).find((r) => typeof r.feedUrl === "string");
+  if (!hit) throw new Error(`No podcast found for "${target}". Try a different name or paste an RSS URL.`);
+  return { feedUrl: hit.feedUrl, name: hit.collectionName ?? null };
+}
+async function playIndex(feedUrl, name, index) {
+  const { channel, episodes } = parseFeed(await fetchText(feedUrl));
+  if (episodes.length === 0) throw new Error("The feed has no playable episodes (no audio enclosures).");
+  const i = Math.max(0, Math.min(index, episodes.length - 1));
+  const ep = episodes[i];
+  if (now.source === "spotify") {
+    try {
+      await pause();
+    } catch {
+    }
+  }
+  if (now.source === "applemusic") pauseIfRunning();
+  const direct = await resolveDirect(ep.url);
+  try {
+    rememberHost(new URL(direct).host);
+  } catch {
+  }
+  play(direct, now.volume);
+  const displayName = name ?? channel ?? feedUrl;
+  now.state = "playing";
+  now.source = "podcast";
+  now.podcastFeed = feedUrl;
+  now.podcastName = displayName;
+  now.episodeIndex = i;
+  now.title = ep.title;
+  const pos = `${i + 1}/${episodes.length}`;
+  return `> ${displayName} \u2014 ${ep.title} (episode ${pos}, newest first)`;
+}
+async function playQuery(target) {
+  const { feedUrl, name } = await resolveFeed(target);
+  return playIndex(feedUrl, name, 0);
+}
+function requireCurrent() {
+  if (now.source !== "podcast" || !now.podcastFeed)
+    throw new Error("No podcast is playing. Use podcast_play first.");
+  return now.podcastFeed;
+}
+async function next3() {
+  return playIndex(requireCurrent(), now.podcastName, now.episodeIndex + 1);
+}
+async function prev3() {
+  if (now.episodeIndex <= 0) throw new Error("Already at the newest episode.");
+  return playIndex(requireCurrent(), now.podcastName, now.episodeIndex - 1);
+}
+async function resume3() {
+  return playIndex(requireCurrent(), now.podcastName, now.episodeIndex);
+}
+
+// src/sources/hoer.ts
+import { execFileSync as execFileSync4 } from "node:child_process";
+var HOME = "https://hoer.live/";
+var UA = { "User-Agent": "Mozilla/5.0" };
+async function currentVideo() {
+  const r = await fetch(HOME, { headers: UA, redirect: "follow" });
+  if (!r.ok) throw new Error(`hoer.live returned ${r.status}.`);
+  const html = await r.text();
+  const m = html.match(/videoId:\s*['"]([\w-]{6,20})['"]/);
+  if (!m) throw new Error("Couldn't find the current show on hoer.live \u2014 the page layout may have changed.");
+  const id = m[1];
+  let title = null;
+  try {
+    const o = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`);
+    if (o.ok) title = (await o.json()).title ?? null;
+  } catch {
+  }
+  return { id, title };
+}
+function resolveAudioUrl(id) {
+  let out;
+  try {
+    out = execFileSync4(
+      "yt-dlp",
+      ["-g", "-f", "bestaudio/best", `https://www.youtube.com/watch?v=${id}`],
+      { encoding: "utf8", timeout: 6e4, windowsHide: true }
+    );
+  } catch (e) {
+    if (e.code === "ENOENT")
+      throw new Error(
+        "H\xD6R streams via YouTube, which needs yt-dlp:\n  macOS:   brew install yt-dlp\n  Windows: winget install yt-dlp\n  Linux:   pipx install yt-dlp  (or your package manager)"
+      );
+    throw new Error("yt-dlp couldn't resolve the H\xD6R stream (video may be members-only or region-locked).");
+  }
+  const url = out.trim().split("\n")[0];
+  if (!url?.startsWith("http")) throw new Error("yt-dlp returned no stream URL for the H\xD6R show.");
+  return url;
+}
+async function play3() {
+  const { id, title } = await currentVideo();
+  const url = resolveAudioUrl(id);
+  if (now.source === "spotify") {
+    try {
+      await pause();
+    } catch {
+    }
+  }
+  if (now.source === "applemusic") pauseIfRunning();
+  try {
+    rememberHost(new URL(url).host);
+  } catch {
+  }
+  play(url, now.volume);
+  now.state = "playing";
+  now.source = "hoer";
+  now.title = title ?? "H\xD6R Berlin";
+  return `> H\xD6R Berlin \u2014 ${title ?? "current show"}`;
+}
+async function resume4() {
+  return play3();
 }
 
 // src/tools.ts
@@ -16195,38 +16625,55 @@ ${describe2()}`
   },
   {
     name: "radio_next",
-    description: "Switch to the next station (radio) or next track (Spotify).",
+    description: "Next station (radio), next track (Spotify/Apple Music), or next-older episode (podcast).",
     schema: noArgs,
     handler: async () => {
       if (now.source === "spotify") {
         await skipNext();
         return "Next track.";
       }
-      const st = await next();
+      if (now.source === "applemusic") {
+        next();
+        return "Next track.";
+      }
+      if (now.source === "podcast") return next3();
+      if (now.source === "hoer") throw new Error("H\xD6R is a single live channel \u2014 nothing to skip to.");
+      const st = await next2();
       return `Next: ${now.genre} \u2014 ${st.name}`;
     }
   },
   {
     name: "radio_prev",
-    description: "Switch to the previous station (radio) or previous track (Spotify).",
+    description: "Previous station (radio), previous track (Spotify/Apple Music), or next-newer episode (podcast).",
     schema: noArgs,
     handler: async () => {
       if (now.source === "spotify") {
         await skipPrev();
         return "Previous track.";
       }
-      const st = await prev();
+      if (now.source === "applemusic") {
+        prev();
+        return "Previous track.";
+      }
+      if (now.source === "podcast") return prev3();
+      if (now.source === "hoer") throw new Error("H\xD6R is a single live channel \u2014 nothing to skip to.");
+      const st = await prev2();
       return `Prev: ${now.genre} \u2014 ${st.name}`;
     }
   },
   {
     name: "radio_pause",
-    description: "Pause playback (radio: stops the stream; Spotify: pauses the device).",
+    description: "Pause playback (radio/podcast: stops the stream; Spotify/Apple Music: pauses the app).",
     schema: noArgs,
     handler: async () => {
       if (now.source === "spotify") {
         try {
           await pause();
+        } catch {
+        }
+      } else if (now.source === "applemusic") {
+        try {
+          pause2();
         } catch {
         }
       } else stop();
@@ -16236,12 +16683,15 @@ ${describe2()}`
   },
   {
     name: "radio_resume",
-    description: "Resume playback.",
+    description: "Resume playback (a paused podcast restarts its episode from the top).",
     schema: noArgs,
     handler: async () => {
       if (now.source === "spotify") await resume();
+      else if (now.source === "applemusic") resume2();
+      else if (now.source === "podcast") return resume3();
+      else if (now.source === "hoer") return resume4();
       else if (now.source === "radio" && now.genre) await playGenre(now.genre, now.stationIndex);
-      else throw new Error("Nothing to resume. Use radio_play or spotify_play_playlist.");
+      else throw new Error("Nothing to resume. Use radio_play, podcast_play, spotify_play_playlist, or music_play.");
       now.state = "playing";
       return "> Resumed.";
     }
@@ -16256,6 +16706,11 @@ ${describe2()}`
           await pause();
         } catch {
         }
+      } else if (now.source === "applemusic") {
+        try {
+          stop2();
+        } catch {
+        }
       } else stop();
       now.state = "stopped";
       now.source = null;
@@ -16266,7 +16721,21 @@ ${describe2()}`
     name: "radio_now_playing",
     description: "Show what is currently playing.",
     schema: noArgs,
-    handler: () => describe2()
+    handler: async () => {
+      if (now.source === "spotify") {
+        try {
+          return `Spotify \u2014 ${await nowPlayingLine()}`;
+        } catch {
+        }
+      }
+      if (now.source === "applemusic") {
+        try {
+          return `Apple Music \u2014 ${nowPlayingLine2()}`;
+        } catch {
+        }
+      }
+      return describe2();
+    }
   },
   {
     name: "radio_volume",
@@ -16278,9 +16747,18 @@ ${describe2()}`
       now.volume = Math.max(0, Math.min(100, Math.round(level)));
       if (now.source === "radio" && now.state === "playing" && now.genre)
         await playGenre(now.genre, now.stationIndex);
+      else if (now.source === "podcast" && now.state === "playing")
+        await resume3();
+      else if (now.source === "hoer" && now.state === "playing")
+        await resume4();
       else if (now.source === "spotify" && now.state === "playing") {
         try {
           await setVolume(now.volume);
+        } catch {
+        }
+      } else if (now.source === "applemusic" && now.state === "playing") {
+        try {
+          setVolume2(now.volume);
         } catch {
         }
       }
@@ -16311,9 +16789,54 @@ ${loginUrl()}`
   },
   {
     name: "spotify_play_playlist",
-    description: "Play a Spotify playlist/podcast by name or uri. Requires Premium + a running Spotify client.",
+    description: "Play anything on Spotify: a spotify: URI, an open.spotify.com URL, one of your playlists by name, or free text (searches the catalog: track > album > playlist > show). Requires Premium + a Spotify client.",
     schema: { type: "object", properties: { target: { type: "string" } }, required: ["target"] },
-    handler: async (a) => playContext(String(a.target))
+    handler: async (a) => {
+      const wasAppleMusic = now.source === "applemusic";
+      const out = await playContext(String(a.target));
+      if (wasAppleMusic) pauseIfRunning();
+      return out;
+    }
+  },
+  {
+    name: "spotify_search",
+    description: `Search the Spotify catalog. Optional type: comma list of track, album, artist, playlist, show, episode (default "track,album,playlist,show").`,
+    schema: {
+      type: "object",
+      properties: { query: { type: "string" }, type: { type: "string" } },
+      required: ["query"]
+    },
+    handler: (a) => search(String(a.query), a.type == null ? void 0 : String(a.type))
+  },
+  {
+    name: "spotify_devices",
+    description: "List your online Spotify Connect devices (the active one is marked with >).",
+    schema: noArgs,
+    handler: () => devices()
+  },
+  {
+    name: "spotify_transfer",
+    description: "Move Spotify playback to another device, by name (substring) or device id.",
+    schema: { type: "object", properties: { device: { type: "string" } }, required: ["device"] },
+    handler: (a) => transfer(String(a.device))
+  },
+  {
+    name: "podcast_play",
+    description: "Play a podcast's newest episode via the local player. Give a podcast name (searched on iTunes, no login) or an RSS feed URL. radio_next/radio_prev then step to older/newer episodes.",
+    schema: { type: "object", properties: { target: { type: "string" } }, required: ["target"] },
+    handler: (a) => playQuery(String(a.target))
+  },
+  {
+    name: "hoer_play",
+    description: "Play H\xD6R Berlin (hoer.live) \u2014 the live DJ stream when on air, otherwise the latest set. Streams via YouTube, so yt-dlp must be installed.",
+    schema: noArgs,
+    handler: () => play3()
+  },
+  {
+    name: "music_play",
+    description: "Play from your Apple Music library via the local Music.app (macOS only). Matches a playlist name first, then a track name, then an album name.",
+    schema: { type: "object", properties: { target: { type: "string" } }, required: ["target"] },
+    handler: (a) => play2(String(a.target))
   }
 ];
 
@@ -16367,7 +16890,7 @@ function armStdinClose() {
   });
 }
 var server = new Server(
-  { name: "radiohead", version: "0.1.0" },
+  { name: "radiohead", version: "0.2.0" },
   { capabilities: { tools: {} } }
 );
 server.setRequestHandler(ListToolsRequestSchema, async () => {

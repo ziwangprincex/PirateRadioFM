@@ -7,7 +7,7 @@
     {
       "name": "radiohead",
       "source": "./",
-      "description": "Radio + Spotify for Claude Code. Auto-stops when your session ends."
+      "description": "Radio + Spotify + podcasts + Apple Music for Claude Code. Auto-stops when your session ends."
     }
   ]
 }

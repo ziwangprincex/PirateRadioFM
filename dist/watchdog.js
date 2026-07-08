@@ -289,7 +289,10 @@ var defaults = {
   stationIndex: 0,
   title: null,
   volume: 80,
-  spotifyVerifier: null
+  spotifyVerifier: null,
+  podcastFeed: null,
+  podcastName: null,
+  episodeIndex: 0
 };
 var now = { ...defaults };
 var inProcTail = Promise.resolve();
