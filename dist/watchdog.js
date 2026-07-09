@@ -171,12 +171,16 @@ function withCrossProcessLock(lockPath2, fn) {
       break;
     } catch {
       let broke = false;
+      let holderKnownAlive = false;
+      let missingHolder = false;
       try {
         const holderPid = Number(readFileSync2(holderFile, "utf8").trim());
-        if (!pidAlive(holderPid)) broke = true;
+        if (pidAlive(holderPid)) holderKnownAlive = true;
+        else broke = true;
       } catch {
+        missingHolder = true;
       }
-      if (!broke) {
+      if (!broke && missingHolder && !holderKnownAlive) {
         try {
           const age = Date.now() - statMtime(lockPath2);
           if (age > LOCK_STALE_MS) broke = true;
@@ -188,8 +192,7 @@ function withCrossProcessLock(lockPath2, fn) {
         continue;
       }
       if (Date.now() > deadline) {
-        forceRelease(lockPath2);
-        continue;
+        throw new Error(`Timed out waiting for lock: ${lockPath2}`);
       }
       sleep(50);
     }

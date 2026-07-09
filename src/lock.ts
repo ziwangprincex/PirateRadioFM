@@ -34,15 +34,23 @@ export function withCrossProcessLock<T>(lockPath: string, fn: () => T): T {
       mkdirSync(lockPath); // atomic: throws EEXIST if held
       break;
     } catch {
-      // Held. Break it if the holder is dead or the lock is ancient.
+      // Held. Break it only if the holder is dead, or if the creator died
+      // before writing a holder file. Never age-steal a lock from a live
+      // holder: legitimate sections can run longer than LOCK_STALE_MS (for
+      // example yt-dlp resolving HÖR), and stealing then reintroduces the
+      // lost-update race this lock exists to prevent.
       let broke = false;
+      let holderKnownAlive = false;
+      let missingHolder = false;
       try {
         const holderPid = Number(readFileSync(holderFile, "utf8").trim());
-        if (!pidAlive(holderPid)) broke = true;
+        if (pidAlive(holderPid)) holderKnownAlive = true;
+        else broke = true;
       } catch {
         // No holder file yet (racing creator) — treat age as the signal.
+        missingHolder = true;
       }
-      if (!broke) {
+      if (!broke && missingHolder && !holderKnownAlive) {
         try {
           const age = Date.now() - statMtime(lockPath);
           if (age > LOCK_STALE_MS) broke = true;
@@ -55,9 +63,7 @@ export function withCrossProcessLock<T>(lockPath: string, fn: () => T): T {
         continue;
       }
       if (Date.now() > deadline) {
-        // Give up waiting and steal rather than deadlock user-facing controls.
-        forceRelease(lockPath);
-        continue;
+        throw new Error(`Timed out waiting for lock: ${lockPath}`);
       }
       sleep(50);
     }

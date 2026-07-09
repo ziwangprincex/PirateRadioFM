@@ -15625,12 +15625,16 @@ function withCrossProcessLock(lockPath2, fn) {
       break;
     } catch {
       let broke = false;
+      let holderKnownAlive = false;
+      let missingHolder = false;
       try {
         const holderPid = Number(readFileSync2(holderFile, "utf8").trim());
-        if (!pidAlive(holderPid)) broke = true;
+        if (pidAlive(holderPid)) holderKnownAlive = true;
+        else broke = true;
       } catch {
+        missingHolder = true;
       }
-      if (!broke) {
+      if (!broke && missingHolder && !holderKnownAlive) {
         try {
           const age = Date.now() - statMtime(lockPath2);
           if (age > LOCK_STALE_MS) broke = true;
@@ -15642,8 +15646,7 @@ function withCrossProcessLock(lockPath2, fn) {
         continue;
       }
       if (Date.now() > deadline) {
-        forceRelease(lockPath2);
-        continue;
+        throw new Error(`Timed out waiting for lock: ${lockPath2}`);
       }
       sleep(50);
     }
@@ -15809,7 +15812,10 @@ var fieldType = {
   episodeIndex: "number"
 };
 function loadStateUnlocked() {
-  if (!existsSync2(statePath)) return;
+  if (!existsSync2(statePath)) {
+    Object.assign(now, defaults);
+    return;
+  }
   let raw = {};
   try {
     raw = JSON.parse(readFileSync4(statePath, "utf8"));
@@ -15863,7 +15869,7 @@ function clearAnchor() {
   }
 }
 function describe2() {
-  if (now.state === "stopped") return "Stopped.";
+  if (now.state === "stopped" || !now.source) return "Stopped.";
   const localSource = now.source === "radio" || now.source === "podcast" || now.source === "hoer";
   if (localSource && now.state === "playing" && livePlayerCountUnlocked() === 0) {
     return "Stopped (player exited unexpectedly).";
@@ -15953,6 +15959,9 @@ function detect() {
   }
   detected = null;
   return null;
+}
+function playerAvailable() {
+  return detect();
 }
 function installHint() {
   return "No audio player found. Install mpv (recommended) or ffmpeg:\n  macOS:   brew install mpv\n  Windows: winget install mpv   (or scoop install mpv)\n  Linux:   sudo apt install mpv  (or your package manager)";
@@ -16070,6 +16079,8 @@ async function complete(code) {
   });
   if (!r.ok) throw new Error(`Token exchange failed: ${await r.text()}`);
   const j = await r.json();
+  if (!j.access_token || !j.refresh_token)
+    throw new Error("Token exchange returned no tokens \u2014 check the code and your Spotify app settings.");
   const ttl = Number(j.expires_in) || 3600;
   saveTokens({ access_token: j.access_token, refresh_token: j.refresh_token, expires_at: Date.now() + ttl * 1e3 });
   now.spotifyVerifier = null;
@@ -16094,6 +16105,7 @@ async function accessToken() {
       });
       if (!r.ok) throw new Error(`Token refresh failed: ${await r.text()}`);
       const j = await r.json();
+      if (!j.access_token) throw new Error("Token refresh returned no access token \u2014 run spotify_login again.");
       const ttl = Number(j.expires_in) || 3600;
       const next4 = { access_token: j.access_token, refresh_token: j.refresh_token ?? t.refresh_token, expires_at: Date.now() + ttl * 1e3 };
       saveTokens(next4);
@@ -16157,14 +16169,14 @@ async function searchBest(query) {
   const j = await r.json();
   for (const t of ["track", "album", "playlist", "show"]) {
     const hit = (j[`${t}s`]?.items ?? []).filter(Boolean)[0];
-    if (hit) return { uri: hit.uri, name: `${hit.name}${hit.artists ? ` \u2014 ${hit.artists.map((a) => a.name).join(", ")}` : ""}` };
+    if (hit?.uri) return { uri: hit.uri, name: `${hit.name}${hit.artists ? ` \u2014 ${hit.artists.map((a) => a.name).join(", ")}` : ""}` };
   }
   return null;
 }
 async function deviceList() {
   const r = await api("/me/player/devices");
   const j = await r.json();
-  return (j.devices ?? []).filter((d) => d.id);
+  return (j.devices ?? []).filter((d) => typeof d.id === "string");
 }
 async function devices() {
   const ds = await deviceList();
@@ -16211,10 +16223,10 @@ async function playContext(uriOrName) {
   if (!uri.startsWith("spotify:")) {
     const r = await api("/me/playlists?limit=50");
     const j = await r.json();
-    const hit = (j.items ?? []).find((p) => p.name.toLowerCase() === uriOrName.toLowerCase());
-    if (hit) {
+    const hit = (j.items ?? []).find((p) => p.name?.toLowerCase() === uriOrName.toLowerCase());
+    if (hit?.uri) {
       uri = hit.uri;
-      displayName = hit.name;
+      displayName = hit.name ?? uriOrName;
     } else {
       const best = await searchBest(uriOrName);
       if (!best) throw new Error(`Nothing on Spotify matches "${uriOrName}". Try spotify_search.`);
@@ -16246,8 +16258,8 @@ async function playWithRecovery(body) {
 }
 async function launchAndWaitForDevice() {
   try {
-    const { execFileSync: execFileSync5 } = await import("node:child_process");
-    execFileSync5("open", ["-a", "Spotify"], { stdio: "ignore", timeout: 8e3 });
+    const { execFileSync: execFileSync6 } = await import("node:child_process");
+    execFileSync6("open", ["-a", "Spotify"], { stdio: "ignore", timeout: 8e3 });
   } catch {
     return null;
   }
@@ -16603,6 +16615,90 @@ async function resume4() {
   return play3();
 }
 
+// src/doctor.ts
+import { execFileSync as execFileSync5 } from "node:child_process";
+import { existsSync as existsSync5 } from "node:fs";
+import { homedir as homedir5 } from "node:os";
+import { join as join8 } from "node:path";
+var icon = { ok: "\u2713", warn: "!", fail: "\u2717" };
+function onPath(bin) {
+  try {
+    if (process.platform === "win32") execFileSync5("where", [bin], { stdio: "ignore", windowsHide: true });
+    else execFileSync5("sh", ["-c", `command -v ${bin}`], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+function checkNode() {
+  const major = Number(process.versions.node.split(".")[0]);
+  return major >= 20 ? { level: "ok", label: "Node.js", detail: `v${process.versions.node}` } : { level: "fail", label: "Node.js", detail: `v${process.versions.node} \u2014 need 20+` };
+}
+function checkPlayer() {
+  const p = playerAvailable();
+  return p ? { level: "ok", label: "Audio player", detail: p } : { level: "fail", label: "Audio player", detail: "no mpv/ffplay \u2014 install mpv (brew/winget/apt install mpv)" };
+}
+function checkYtDlp() {
+  return onPath("yt-dlp") ? { level: "ok", label: "yt-dlp", detail: "found (H\xD6R available)" } : { level: "warn", label: "yt-dlp", detail: "not found \u2014 only /hoer needs it (winget/brew/pipx install yt-dlp)" };
+}
+function checkSpotify() {
+  const hasId = !!process.env.SPOTIFY_CLIENT_ID;
+  const hasToken = existsSync5(join8(homedir5(), ".pirate-radio", "spotify.json"));
+  if (!hasId && !hasToken)
+    return { level: "warn", label: "Spotify", detail: "not configured \u2014 set SPOTIFY_CLIENT_ID, then /spotify-login (optional)" };
+  if (hasId && !hasToken)
+    return { level: "warn", label: "Spotify", detail: "client id set, not logged in \u2014 run /spotify-login" };
+  if (!hasId && hasToken)
+    return { level: "warn", label: "Spotify", detail: "token cached but SPOTIFY_CLIENT_ID unset \u2014 refresh will fail" };
+  return { level: "ok", label: "Spotify", detail: "client id set + logged in" };
+}
+function checkSession() {
+  const anchor = readAnchor();
+  if (!anchor) return { level: "warn", label: "Session anchor", detail: "none \u2014 music started now won't auto-stop on session end" };
+  return anchorAlive(anchor) ? { level: "ok", label: "Session anchor", detail: `live (pid ${anchor.pid})` } : { level: "warn", label: "Session anchor", detail: `stale (pid ${anchor.pid} gone) \u2014 will be cleared on next server start` };
+}
+function checkPlayers() {
+  const n = livePlayerCountUnlocked();
+  return { level: "ok", label: "Tracked players", detail: n === 0 ? "none playing" : `${n} live` };
+}
+async function checkStream() {
+  const stations3 = all();
+  const first = Object.values(stations3).flat()[0];
+  if (!first) return { level: "fail", label: "Stream reachability", detail: "no stations loaded (stations.json missing?)" };
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 6e3);
+  try {
+    const r = await fetch(first.url, { signal: ac.signal, redirect: "follow" });
+    r.body?.cancel().catch(() => {
+    });
+    return r.ok || r.status === 405 ? { level: "ok", label: "Stream reachability", detail: `${first.name} \u2192 ${r.status}` } : { level: "warn", label: "Stream reachability", detail: `${first.name} \u2192 ${r.status} (may be temporary)` };
+  } catch (e) {
+    const why = e.name === "AbortError" ? "timed out" : e.message;
+    return { level: "warn", label: "Stream reachability", detail: `${first.name} unreachable \u2014 ${why} (check your network)` };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function doctor() {
+  const checks = [
+    checkNode(),
+    checkPlayer(),
+    checkYtDlp(),
+    checkSpotify(),
+    checkSession(),
+    checkPlayers(),
+    await checkStream()
+  ];
+  const lines = checks.map((c) => `  ${icon[c.level]} ${c.label}: ${c.detail}`);
+  const fails = checks.filter((c) => c.level === "fail").length;
+  const warns = checks.filter((c) => c.level === "warn").length;
+  const summary = fails > 0 ? `${fails} problem(s) block playback \u2014 fix the \u2717 lines above.` : warns > 0 ? `Ready to play. ${warns} optional item(s) noted (!).` : "All systems go.";
+  return `pirate-radio doctor (stations: ${hosts().length} hosts)
+${lines.join("\n")}
+
+${summary}`;
+}
+
 // src/tools.ts
 var noArgs = { type: "object", properties: {}, additionalProperties: false };
 var tools = [
@@ -16666,6 +16762,16 @@ ${describe2()}`
     description: "Pause playback (radio/podcast: stops the stream; Spotify/Apple Music: pauses the app).",
     schema: noArgs,
     handler: async () => {
+      if (now.state === "stopped") {
+        now.state = "stopped";
+        now.source = null;
+        return "Stopped.";
+      }
+      if (!now.source) {
+        stop();
+        now.state = "stopped";
+        return "Stopped.";
+      }
       if (now.source === "spotify") {
         try {
           await pause();
@@ -16742,7 +16848,8 @@ ${describe2()}`
     description: "Set volume 0-100 (applies to radio; restarts the current stream).",
     schema: { type: "object", properties: { level: { type: "number", minimum: 0, maximum: 100 } }, required: ["level"] },
     handler: async (a) => {
-      const level = Number(a.level);
+      const raw = a.level;
+      const level = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : NaN;
       if (!Number.isFinite(level)) throw new Error("Give a volume 0-100, e.g. level=60.");
       now.volume = Math.max(0, Math.min(100, Math.round(level)));
       if (now.source === "radio" && now.state === "playing" && now.genre)
@@ -16837,6 +16944,12 @@ ${loginUrl()}`
     description: "Play from your Apple Music library via the local Music.app (macOS only). Matches a playlist name first, then a track name, then an album name.",
     schema: { type: "object", properties: { target: { type: "string" } }, required: ["target"] },
     handler: (a) => play2(String(a.target))
+  },
+  {
+    name: "radio_doctor",
+    description: "Diagnose the playback environment: audio player, yt-dlp, Spotify config/login, session anchor, tracked players, and stream reachability. Run this first when playback isn't working.",
+    schema: noArgs,
+    handler: () => doctor()
   }
 ];
 
@@ -16903,6 +17016,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   armStdinClose();
   const tool = tools.find((t) => t.name === req.params.name);
   if (!tool) throw new Error(`Unknown tool: ${req.params.name}`);
+  if (tool.name === "radio_doctor") {
+    try {
+      const out = await tool.handler(req.params.arguments ?? {});
+      return { content: [{ type: "text", text: out }] };
+    } catch (e) {
+      return { content: [{ type: "text", text: `Error: ${e.message}` }], isError: true };
+    }
+  }
   try {
     const out = await withState(() => tool.handler(req.params.arguments ?? {}));
     return { content: [{ type: "text", text: out }] };

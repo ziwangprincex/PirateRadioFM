@@ -1,0 +1,11 @@
+# Normalize line endings so the committed dist/ bundles never show a spurious
+# "modified" status on Windows checkouts (where git would otherwise want CRLF).
+# dist/ is checked into git and run as-is by the plugin, so its bytes must be
+# stable across platforms and match what CI's `npm run build` produces on Linux.
+* text=auto eol=lf
+
+# Binary assets: never touch their bytes.
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary

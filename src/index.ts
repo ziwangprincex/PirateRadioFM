@@ -95,6 +95,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   armStdinClose();
   const tool = tools.find((t) => t.name === req.params.name);
   if (!tool) throw new Error(`Unknown tool: ${req.params.name}`);
+  if (tool.name === "radio_doctor") {
+    try {
+      const out = await tool.handler(req.params.arguments ?? {});
+      return { content: [{ type: "text", text: out }] };
+    } catch (e) {
+      return { content: [{ type: "text", text: `Error: ${(e as Error).message}` }], isError: true };
+    }
+  }
   // withState holds the state lock across the whole handler: it fresh-loads on
   // entry (picking up any CLI writes since our last call) and atomically saves
   // on exit. That way concurrent CLI + MCP writers can't lost-update each

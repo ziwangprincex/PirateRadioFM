@@ -108,7 +108,10 @@ const fieldType: Record<keyof NowPlaying, "string" | "number"> = {
 };
 
 function loadStateUnlocked(): void {
-  if (!existsSync(statePath)) return;
+  if (!existsSync(statePath)) {
+    Object.assign(now, defaults);
+    return;
+  }
   let raw: Record<string, unknown> = {};
   try {
     raw = JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>;
@@ -188,7 +191,7 @@ export function clearAnchor(): void {
 }
 
 export function describe(): string {
-  if (now.state === "stopped") return "Stopped.";
+  if (now.state === "stopped" || !now.source) return "Stopped.";
   // Reconcile with reality for the local-player paths (radio, podcast): if the
   // mpv/ffplay we recorded is dead (crashed, OOM, user-kill), the on-disk state
   // still says "playing" until the next explicit stop/play. Show that honestly.
