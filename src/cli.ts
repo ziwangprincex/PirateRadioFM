@@ -5,6 +5,7 @@
 import { tools } from "./tools.js";
 import { saveState, withState } from "./state.js";
 import { parseArgs } from "./argparse.js";
+import { doctor } from "./doctor.js";
 
 async function main(): Promise<void> {
   const [, , toolName, ...rest] = process.argv;
@@ -12,6 +13,17 @@ async function main(): Promise<void> {
     console.error("Usage: cli.js <tool-name> [json-args]");
     console.error("Available tools: " + tools.map((t) => t.name).join(", "));
     process.exit(1);
+  }
+
+  // `doctor` / `radio_doctor` is a read-only environment probe: no state
+  // mutation, so it skips withState (and its lock) entirely. It also owns the
+  // process exit code so a blocking problem is scriptable (e.g. in CI / a shell
+  // `&&` chain). Keep the short alias for humans and the registered tool name
+  // for generated command prompts.
+  if (toolName === "doctor" || toolName === "radio_doctor") {
+    const report = await doctor();
+    process.stdout.write(report + "\n");
+    process.exit(report.includes("✗") ? 1 : 0);
   }
 
   const tool = tools.find((t) => t.name === toolName);

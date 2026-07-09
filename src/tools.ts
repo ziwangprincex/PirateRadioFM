@@ -6,6 +6,7 @@ import * as applemusic from "./sources/applemusic.js";
 import * as hoer from "./sources/hoer.js";
 import * as player from "./player.js";
 import { now, describe } from "./state.js";
+import { doctor } from "./doctor.js";
 
 type Handler = (args: any) => Promise<string> | string;
 interface Tool { name: string; description: string; schema: any; handler: Handler; }
@@ -60,6 +61,16 @@ export const tools: Tool[] = [
     description: "Pause playback (radio/podcast: stops the stream; Spotify/Apple Music: pauses the app).",
     schema: noArgs,
     handler: async () => {
+      if (now.state === "stopped") {
+        now.state = "stopped";
+        now.source = null;
+        return "Stopped.";
+      }
+      if (!now.source) {
+        player.stop();
+        now.state = "stopped";
+        return "Stopped.";
+      }
       // Reflect the user's INTENT in state even if the underlying call fails —
       // otherwise a Spotify network hiccup leaves now.state stuck at "playing"
       // and radio_now_playing lies.
@@ -121,9 +132,14 @@ export const tools: Tool[] = [
     description: "Set volume 0-100 (applies to radio; restarts the current stream).",
     schema: { type: "object", properties: { level: { type: "number", minimum: 0, maximum: 100 } }, required: ["level"] },
     handler: async (a) => {
-      // Reject missing/non-numeric input up front: Number(undefined) is NaN, and
-      // NaN would flow into state.json (as null) and later into mpv's --volume.
-      const level = Number(a.level);
+      // Reject missing/non-numeric input up front. Be stricter than Number():
+      // Number("") and Number(null) are 0, which would turn `/volume` or
+      // `/volume level=` into an accidental mute.
+      const raw = a.level;
+      const level =
+        typeof raw === "number" ? raw
+          : typeof raw === "string" && raw.trim() !== "" ? Number(raw)
+            : NaN;
       if (!Number.isFinite(level)) throw new Error("Give a volume 0-100, e.g. level=60.");
       now.volume = Math.max(0, Math.min(100, Math.round(level)));
       if (now.source === "radio" && now.state === "playing" && now.genre)
@@ -222,5 +238,13 @@ export const tools: Tool[] = [
       "Matches a playlist name first, then a track name, then an album name.",
     schema: { type: "object", properties: { target: { type: "string" } }, required: ["target"] },
     handler: (a) => applemusic.play(String(a.target)),
+  },
+  {
+    name: "radio_doctor",
+    description:
+      "Diagnose the playback environment: audio player, yt-dlp, Spotify config/login, " +
+      "session anchor, tracked players, and stream reachability. Run this first when playback isn't working.",
+    schema: noArgs,
+    handler: () => doctor(),
   },
 ];

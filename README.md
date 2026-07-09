@@ -96,6 +96,7 @@ music does not stop when the session ends. Use `/stop`.
 | `/prev` | Previous station / channel / track |
 | `/volume <0-100>` | Set volume |
 | `/now-playing` | Show what's playing |
+| `/doctor` | Diagnose playback problems (player, yt-dlp, Spotify, streams) |
 
 `/nts`, `/paradise`, and `/npr` have several channels; `/next` cycles through them.
 
