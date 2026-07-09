@@ -24,15 +24,24 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = dirname(fileURLToPath(import.meta.url));
-const serverJs = join(root, "dist", "index.js");
-const cliJs = join(root, "dist", "cli.js");
+// Use forward slashes even on Windows. Node accepts them everywhere, and it
+// avoids backslashes being interpreted as escape sequences when these paths are
+// embedded in TOML (codex) or YAML (hermes) double-quoted strings — e.g. the
+// `\U` in `C:\Users` would otherwise be read as a broken unicode escape.
+const toPosix = (p) => p.replace(/\\/g, "/");
+const serverJs = toPosix(join(root, "dist", "index.js"));
+const cliJs = toPosix(join(root, "dist", "cli.js"));
 const home = homedir();
 
 // --- source of truth: parse commands/*.md ----------------------------------
 // Each file is Claude-flavored: frontmatter (description) + optional prose +
 // one !`node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" <tool> [args]` line.
 function parseCommand(file) {
-  const raw = readFileSync(join(root, "commands", file), "utf8");
+  // Normalize CRLF → LF. On Windows, git checks these files out with CRLF
+  // endings, which would break the \n-anchored frontmatter/invocation regexes
+  // below and silently yield zero commands (leaving every host with only the
+  // MCP server and no slash commands).
+  const raw = readFileSync(join(root, "commands", file), "utf8").replace(/\r\n/g, "\n");
   const m = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
   if (!m) return null;
   const description = (m[1].match(/^description:\s*(.+)$/m) ?? [])[1]?.trim() ?? "";
