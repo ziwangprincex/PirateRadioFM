@@ -56,6 +56,17 @@ const commands = readdirSync(join(root, "commands"))
   .map(parseCommand)
   .filter(Boolean);
 
+// Genre list for radio_play, derived from the SAME station data the runtime
+// uses — so it never drifts out of sync when a station is added (the previous
+// hand-typed list had silently dropped "npr"). Falls back to empty on a missing
+// or corrupt file rather than aborting the install.
+let radioGenres = "";
+try {
+  radioGenres = Object.keys(JSON.parse(readFileSync(join(root, "data", "stations.json"), "utf8"))).join(", ");
+} catch {
+  /* leave empty — the note just omits the explicit list */
+}
+
 // Rebuild the concrete CLI invocation with an absolute path for hosts that run
 // it via their own shell-injection or bash tool.
 const cliCall = (c) => `node "${cliJs}" ${c.tool}${c.args ? " " + c.args : ""}`;
@@ -213,7 +224,7 @@ node "${cliJs}" <tool> [key=value ...]
 ${toolLines}
 
 Notes:
-- Genres for \`radio_play\`: jazz, classical, indie, rock, country, pop, ambient, lofi, soul, eighties, world, house, techno, kexp, kcrw, wfmu, nts, wwoz, paradise.
+${radioGenres ? `- Genres for \`radio_play\`: ${radioGenres}.` : "- Genres for `radio_play`: run `radio_list` to see available genres."}
 - pi has no session anchor, so music does NOT stop when the session ends — run \`radio_stop\` when the user is done.
 - Spotify tools need SPOTIFY_CLIENT_ID exported and a Premium account.
 `);
