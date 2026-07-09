@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit",
     "build": "node build.mjs",
     "start": "node dist/index.js",
-    "check": "tsc --noEmit && node build.mjs && node dist/selfcheck.js"
+    "check": "tsc --noEmit && node build.mjs && node --test dist/selfcheck.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0"
