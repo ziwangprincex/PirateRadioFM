@@ -21,6 +21,32 @@ interface Tokens { access_token: string; refresh_token: string; expires_at: numb
 // PKCE verifier is held between loginUrl() and complete() across separate CLI
 // invocations, so it lives in the persisted state, not module-level memory.
 
+// --- Web API response shapes ------------------------------------------------
+// Hand-written narrow types over the fields we actually read. Not exhaustive
+// and not runtime-validated: every field is optional because Spotify can omit
+// them (204 bodies, null placeholder items, partial objects), so downstream
+// code already guards with `?.` / `?? []`. This just replaces the pile of
+// `as any` with something the compiler can check our field accesses against.
+interface TokenResponse { access_token?: string; refresh_token?: string; expires_in?: number; }
+interface SpotifyItem {
+  name?: string;
+  uri?: string;
+  artists?: Array<{ name?: string }>;
+  owner?: { display_name?: string };
+  publisher?: string;
+  duration_ms?: number;
+  show?: { name?: string };
+}
+interface PagedItems { items?: SpotifyItem[] | null; }
+type SearchResponse = Partial<Record<`${SearchType}s`, PagedItems>>;
+interface DevicesResponse { devices?: Array<Partial<Device>> | null; }
+interface PlayerResponse {
+  item?: SpotifyItem | null;
+  is_playing?: boolean;
+  progress_ms?: number;
+  device?: { name?: string };
+}
+
 function clientId(): string {
   const id = process.env.SPOTIFY_CLIENT_ID;
   if (!id) throw new Error("Set SPOTIFY_CLIENT_ID (from your Spotify developer app) to use Spotify.");
@@ -79,7 +105,9 @@ export async function complete(code: string): Promise<void> {
     body,
   });
   if (!r.ok) throw new Error(`Token exchange failed: ${await r.text()}`);
-  const j = (await r.json()) as any;
+  const j = (await r.json()) as TokenResponse;
+  if (!j.access_token || !j.refresh_token)
+    throw new Error("Token exchange returned no tokens — check the code and your Spotify app settings.");
   // Fall back to Spotify's documented 1-hour default if expires_in is missing —
   // otherwise `undefined * 1000 = NaN` wedges the refresh check forever.
   const ttl = Number(j.expires_in) || 3600;
@@ -113,7 +141,8 @@ async function accessToken(): Promise<string> {
         body,
       });
       if (!r.ok) throw new Error(`Token refresh failed: ${await r.text()}`);
-      const j = (await r.json()) as any;
+      const j = (await r.json()) as TokenResponse;
+      if (!j.access_token) throw new Error("Token refresh returned no access token — run spotify_login again.");
       const ttl = Number(j.expires_in) || 3600;
       const next: Tokens = { access_token: j.access_token, refresh_token: j.refresh_token ?? t.refresh_token, expires_at: Date.now() + ttl * 1000 };
       saveTokens(next);
@@ -155,8 +184,8 @@ function statusError(status: number, message: string): Error {
 
 export async function listPlaylists(): Promise<string> {
   const r = await api("/me/playlists?limit=20");
-  const j = (await r.json()) as any;
-  const items = (j.items ?? []).map((p: any) => `• ${p.name}  [${p.uri}]`);
+  const j = (await r.json()) as PagedItems;
+  const items = (j.items ?? []).map((p) => `• ${p.name}  [${p.uri}]`);
   return items.length ? items.join("\n") : "No playlists found.";
 }
 
@@ -165,10 +194,10 @@ export async function listPlaylists(): Promise<string> {
 const SEARCH_TYPES = ["track", "album", "artist", "playlist", "show", "episode"] as const;
 type SearchType = (typeof SEARCH_TYPES)[number];
 
-function fmtHit(t: SearchType, x: any): string {
+function fmtHit(t: SearchType, x: SpotifyItem): string {
   const by =
     t === "track" || t === "album"
-      ? ` — ${(x.artists ?? []).map((a: any) => a.name).join(", ")}`
+      ? ` — ${(x.artists ?? []).map((a) => a.name).join(", ")}`
       : t === "playlist"
         ? ` — by ${x.owner?.display_name ?? "?"}`
         : t === "show"
@@ -188,13 +217,13 @@ export async function search(query: string, types?: string): Promise<string> {
     throw new Error(`No valid search type. Use a comma list of: ${SEARCH_TYPES.join(", ")}`);
   const p = new URLSearchParams({ q: query, type: wanted.join(","), limit: "5" });
   const r = await api(`/search?${p}`);
-  const j = (await r.json()) as any;
+  const j = (await r.json()) as SearchResponse;
   const out: string[] = [];
   for (const t of wanted) {
     // Search can return null placeholder items; drop them before formatting.
     const items = (j[`${t}s`]?.items ?? []).filter(Boolean);
     if (items.length === 0) continue;
-    out.push(`${t.toUpperCase()}S`, ...items.map((x: any) => fmtHit(t, x)));
+    out.push(`${t.toUpperCase()}S`, ...items.map((x) => fmtHit(t, x)));
   }
   return out.length ? out.join("\n") : `No results for "${query}".`;
 }
@@ -203,10 +232,10 @@ export async function search(query: string, types?: string): Promise<string> {
 async function searchBest(query: string): Promise<{ uri: string; name: string } | null> {
   const p = new URLSearchParams({ q: query, type: "track,album,playlist,show", limit: "1" });
   const r = await api(`/search?${p}`);
-  const j = (await r.json()) as any;
-  for (const t of ["track", "album", "playlist", "show"]) {
+  const j = (await r.json()) as SearchResponse;
+  for (const t of ["track", "album", "playlist", "show"] as const) {
     const hit = (j[`${t}s`]?.items ?? []).filter(Boolean)[0];
-    if (hit) return { uri: hit.uri, name: `${hit.name}${hit.artists ? ` — ${hit.artists.map((a: any) => a.name).join(", ")}` : ""}` };
+    if (hit?.uri) return { uri: hit.uri, name: `${hit.name}${hit.artists ? ` — ${hit.artists.map((a) => a.name).join(", ")}` : ""}` };
   }
   return null;
 }
@@ -217,8 +246,8 @@ interface Device { id: string; name: string; type: string; is_active: boolean; }
 
 async function deviceList(): Promise<Device[]> {
   const r = await api("/me/player/devices");
-  const j = (await r.json()) as any;
-  return (j.devices ?? []).filter((d: any) => d.id);
+  const j = (await r.json()) as DevicesResponse;
+  return (j.devices ?? []).filter((d): d is Device => typeof d.id === "string");
 }
 
 export async function devices(): Promise<string> {
@@ -250,13 +279,13 @@ export async function transfer(nameOrId: string): Promise<string> {
 export async function nowPlayingLine(): Promise<string> {
   const r = await api("/me/player");
   if (r.status === 204) return "Spotify: nothing playing.";
-  const j = (await r.json()) as any;
+  const j = (await r.json()) as PlayerResponse;
   const item = j.item;
   if (!item) return "Spotify: nothing playing.";
-  const who = (item.artists ?? []).map((a: any) => a.name).join(", ") || item.show?.name || "";
+  const who = (item.artists ?? []).map((a) => a.name).join(", ") || item.show?.name || "";
   const t = (ms: number) => `${Math.floor(ms / 60000)}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, "0")}`;
   const pos = Number.isFinite(j.progress_ms) && Number.isFinite(item.duration_ms)
-    ? ` (${t(j.progress_ms)}/${t(item.duration_ms)})`
+    ? ` (${t(j.progress_ms!)}/${t(item.duration_ms!)})`
     : "";
   return `${j.is_playing ? "Playing" : "Paused"}: ${item.name}${who ? ` — ${who}` : ""}${pos} on ${j.device?.name ?? "?"}`;
 }
@@ -285,11 +314,11 @@ export async function playContext(uriOrName: string): Promise<string> {
   let displayName = uriOrName;
   if (!uri.startsWith("spotify:")) {
     const r = await api("/me/playlists?limit=50");
-    const j = (await r.json()) as any;
-    const hit = (j.items ?? []).find((p: any) => p.name.toLowerCase() === uriOrName.toLowerCase());
-    if (hit) {
+    const j = (await r.json()) as PagedItems;
+    const hit = (j.items ?? []).find((p) => p.name?.toLowerCase() === uriOrName.toLowerCase());
+    if (hit?.uri) {
       uri = hit.uri;
-      displayName = hit.name;
+      displayName = hit.name ?? uriOrName;
     } else {
       const best = await searchBest(uriOrName);
       if (!best) throw new Error(`Nothing on Spotify matches "${uriOrName}". Try spotify_search.`);
