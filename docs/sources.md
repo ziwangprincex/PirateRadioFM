@@ -1,4 +1,4 @@
-# Podcast, Spotify, and Apple Music sources
+# Podcast, Spotify, Apple Music, and HÖR sources
 
 v0.2.0 adds three sources next to the built-in radio stations. This page covers
 how each works, what it needs, and its known limits.
@@ -13,6 +13,7 @@ how each works, what it needs, and its known limits.
 | **Podcast** | local mpv/ffplay | nothing (no login) | all |
 | **Spotify** | remote-controls the Spotify client | Premium + dev app + login | all |
 | **Apple Music** | remote-controls the local Music.app | track already in your library | macOS only |
+| **HÖR** | local mpv/ffplay via yt-dlp | yt-dlp + YouTube cookies | all |
 
 `/pause` `/resume` `/next` `/prev` `/volume` `/stop` `/now-playing` work for all
 four sources — they dispatch on whatever is currently playing. Switching sources
@@ -107,5 +108,75 @@ no tokens.
 | `src/sources/podcast.ts` | iTunes search, dependency-free RSS parse, per-episode playback |
 | `src/sources/applemusic.ts` | osascript wrappers, 3-tier library match |
 | `src/sources/spotify.ts` | catalog search, devices/transfer, now-playing, 404 self-heal |
+| `src/sources/hoer.ts` | HÖR homepage scrape, yt-dlp resolution, cookie auth |
 | `src/dynhosts.ts` | podcast CDN host registry for the orphan sweep |
 | `src/tools.ts` | dispatches pause/resume/next/prev/volume/stop on `now.source` |
+
+## HÖR Berlin
+
+HÖR (hoer.live) is a Berlin-based DJ live-streaming platform. It has no audio
+endpoint of its own — the "radio" is a YouTube live embed on its homepage.
+PirateRadioFM scrapes the current video ID, uses `yt-dlp` to resolve the direct
+audio URL, and plays it through the local player (mpv/ffplay).
+
+### Prerequisites
+
+1. **yt-dlp** installed and on PATH:
+   - Windows: `winget install yt-dlp`
+   - macOS: `brew install yt-dlp`
+   - Linux: `pipx install yt-dlp`
+
+2. **YouTube cookies** — YouTube requires login cookies to serve streams to
+   non-browser clients (bot detection). You must provide cookies via one of:
+
+### Setup (cookies.txt — recommended)
+
+This method works on all platforms and never locks the browser's database.
+
+1. Open Chrome (or any browser), go to youtube.com, make sure you're signed in.
+2. Install a cookies export extension — e.g. **"Get cookies.txt LOCALLY"**
+   (Chrome Web Store). Choose one that does NOT upload cookies to a server.
+3. On youtube.com, click the extension → export → save to:
+   - Windows: `C:\Users\<username>\.pirate-radio\cookies.txt`
+   - macOS/Linux: `~/.pirate-radio/cookies.txt`
+4. Set the environment variable:
+   ```bash
+   export HOER_COOKIES_FILE="$HOME/.pirate-radio/cookies.txt"
+   ```
+   For Claude Code, add to `~/.claude/settings.json`:
+   ```json
+   { "env": { "HOER_COOKIES_FILE": "C:/Users/<username>/.pirate-radio/cookies.txt" } }
+   ```
+5. `/hoer` should now work.
+
+### Alternative: cookies-from-browser
+
+If you prefer not to export a file, yt-dlp can read cookies directly from a
+browser's cookie store:
+
+```bash
+export HOER_COOKIES_FROM_BROWSER=firefox    # Firefox works even while open
+export HOER_COOKIES_FROM_BROWSER=chrome     # Chrome/Edge must be fully closed (Windows)
+```
+
+**Windows caveat:** Chrome v127+ uses App-Bound Encryption. yt-dlp often cannot
+decrypt Chrome cookies on Windows even when Chrome is closed (yt-dlp #10927).
+The cookies.txt method is more reliable.
+
+### Troubleshooting
+
+| Error | Cause | Fix |
+|---|---|---|
+| "Sign in to confirm you're not a bot" | No cookies configured, or cookies expired | Export fresh cookies.txt |
+| "Could not copy cookie database" | `COOKIES_FROM_BROWSER` set but browser is running (locks the DB) | Close the browser, or switch to `COOKIES_FILE` |
+| "Failed to decrypt with DPAPI" | Chrome's App-Bound Encryption (Windows, Chrome v127+) | Use `COOKIES_FILE` instead of `COOKIES_FROM_BROWSER` |
+| Cookies expire (every few months) | YouTube session cookies have a TTL | Re-export cookies.txt and overwrite the old file |
+
+### How it works
+
+1. Fetches `hoer.live`, regex-extracts the embedded YouTube `videoId`.
+2. Calls `yt-dlp -g -f bestaudio/best --cookies <file> <youtube-url>` to
+   resolve the direct audio stream URL (HLS manifest or direct link).
+3. Plays the resolved URL through mpv/ffplay at the current volume.
+4. The resolved `googlevideo.com` host is registered with `rememberHost()` so
+   the orphan-sweep (session-end auto-stop) can still kill the player.

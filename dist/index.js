@@ -16573,17 +16573,28 @@ async function currentVideo() {
   return { id, title };
 }
 function resolveAudioUrl(id) {
+  const args = ["-g", "-f", "bestaudio/best"];
+  const cookieFile = process.env.HOER_COOKIES_FILE?.trim();
+  const browser = process.env.HOER_COOKIES_FROM_BROWSER?.trim();
+  if (cookieFile) args.push("--cookies", cookieFile);
+  else if (browser) args.push("--cookies-from-browser", browser);
+  args.push(`https://www.youtube.com/watch?v=${id}`);
   let out;
   try {
-    out = execFileSync4(
-      "yt-dlp",
-      ["-g", "-f", "bestaudio/best", `https://www.youtube.com/watch?v=${id}`],
-      { encoding: "utf8", timeout: 6e4, windowsHide: true }
-    );
+    out = execFileSync4("yt-dlp", args, { encoding: "utf8", timeout: 6e4, windowsHide: true });
   } catch (e) {
     if (e.code === "ENOENT")
       throw new Error(
         "H\xD6R streams via YouTube, which needs yt-dlp:\n  macOS:   brew install yt-dlp\n  Windows: winget install yt-dlp\n  Linux:   pipx install yt-dlp  (or your package manager)"
+      );
+    const stderr = String(e.stderr ?? "");
+    if (/Could not copy .* cookie database|database is locked/i.test(stderr))
+      throw new Error(
+        "Couldn't read the browser's cookie database \u2014 it's locked because the browser is running.\nFully quit " + (browser ?? "the browser") + " and retry, or export cookies to a file:\n  HOER_COOKIES_FILE=/path/to/cookies.txt"
+      );
+    if (/confirm you.?re not a bot|Sign in to confirm/i.test(stderr))
+      throw new Error(
+        "YouTube blocked this stream with a bot check. Authenticate yt-dlp:\n  HOER_COOKIES_FROM_BROWSER=firefox  (works while open)\n  HOER_COOKIES_FROM_BROWSER=chrome   (must close Chrome first on Windows)\n  HOER_COOKIES_FILE=/path/to/cookies.txt  (exported Netscape cookies \u2014 always works)"
       );
     throw new Error("yt-dlp couldn't resolve the H\xD6R stream (video may be members-only or region-locked).");
   }

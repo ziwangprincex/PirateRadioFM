@@ -82,7 +82,7 @@ music does not stop when the session ends. Use `/stop`.
 | `/wwoz` | WWOZ New Orleans, jazz & blues |
 | `/paradise` | Radio Paradise |
 | `/npr` | NPR music stations — The Current, WXPN, KUTX, WFUV (`/next` cycles) |
-| `/hoer` | HÖR Berlin — live DJ stream when on air, latest set otherwise (needs `yt-dlp`) |
+| `/hoer` | HÖR Berlin — live DJ stream when on air, latest set otherwise ([setup](./docs/sources.md#hör-berlin)) |
 
 ### Playback control
 

@@ -36,14 +36,24 @@ async function currentVideo(): Promise<{ id: string; title: string | null }> {
 // yt-dlp -g prints the direct media URL (for live shows: an HLS manifest) —
 // both mpv and ffplay play either. The id is regex-restricted to [\w-], and it
 // goes through an argv array, so nothing can be injected.
+//
+// YouTube gates many streams behind bot-detection. Two auth options:
+//   HOER_COOKIES_FILE          — path to an exported cookies.txt (Netscape fmt).
+//                                Lock-free; works while the browser is open.
+//   HOER_COOKIES_FROM_BROWSER  — browser name for yt-dlp (chrome, firefox, edge,
+//                                brave, ...). Chrome/Edge must be closed on
+//                                Windows (they lock the cookie DB).
 function resolveAudioUrl(id: string): string {
+  const args = ["-g", "-f", "bestaudio/best"];
+  const cookieFile = process.env.HOER_COOKIES_FILE?.trim();
+  const browser = process.env.HOER_COOKIES_FROM_BROWSER?.trim();
+  if (cookieFile) args.push("--cookies", cookieFile);
+  else if (browser) args.push("--cookies-from-browser", browser);
+  args.push(`https://www.youtube.com/watch?v=${id}`);
+
   let out: string;
   try {
-    out = execFileSync(
-      "yt-dlp",
-      ["-g", "-f", "bestaudio/best", `https://www.youtube.com/watch?v=${id}`],
-      { encoding: "utf8", timeout: 60_000, windowsHide: true },
-    );
+    out = execFileSync("yt-dlp", args, { encoding: "utf8", timeout: 60_000, windowsHide: true });
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT")
       throw new Error(
@@ -51,6 +61,20 @@ function resolveAudioUrl(id: string): string {
           "  macOS:   brew install yt-dlp\n" +
           "  Windows: winget install yt-dlp\n" +
           "  Linux:   pipx install yt-dlp  (or your package manager)",
+      );
+    const stderr = String((e as { stderr?: unknown }).stderr ?? "");
+    if (/Could not copy .* cookie database|database is locked/i.test(stderr))
+      throw new Error(
+        "Couldn't read the browser's cookie database — it's locked because the browser is running.\n" +
+          "Fully quit " + (browser ?? "the browser") + " and retry, or export cookies to a file:\n" +
+          "  HOER_COOKIES_FILE=/path/to/cookies.txt",
+      );
+    if (/confirm you.?re not a bot|Sign in to confirm/i.test(stderr))
+      throw new Error(
+        "YouTube blocked this stream with a bot check. Authenticate yt-dlp:\n" +
+          "  HOER_COOKIES_FROM_BROWSER=firefox  (works while open)\n" +
+          "  HOER_COOKIES_FROM_BROWSER=chrome   (must close Chrome first on Windows)\n" +
+          "  HOER_COOKIES_FILE=/path/to/cookies.txt  (exported Netscape cookies — always works)",
       );
     throw new Error("yt-dlp couldn't resolve the HÖR stream (video may be members-only or region-locked).");
   }
