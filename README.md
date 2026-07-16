@@ -2,7 +2,7 @@
 
 # PirateRadioFM
 
-Play internet radio from a CLI coding agent. Music stops automatically when
+Play internet radio from a CLI coding agent. 
 the session ends.
 
 [中文文档](./README.zh-CN.md)
