@@ -1,0 +1,26 @@
+name: Station health
+
+on:
+  schedule:
+    # Weekly, Monday 08:00 UTC. Stream failures stay separate from PR CI.
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: station-health
+  cancel-in-progress: true
+
+jobs:
+  check-stations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm ci --no-audit --no-fund
+      - run: npm run check:stations

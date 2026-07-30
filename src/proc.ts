@@ -12,6 +12,7 @@
 // so MSYS/Git-Bash path mangling of flags like `/F` never happens.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { lifecycleTestMode } from "./lifecycle-mode.js";
 
 const isWin = process.platform === "win32";
 const isMac = process.platform === "darwin";
@@ -35,6 +36,7 @@ export function pidAlive(pid: number): boolean {
 // token changes. Best-effort: returns null when it can't be determined, and
 // callers must degrade gracefully (fall back to bare pidAlive) in that case.
 export function procStartToken(pid: number): string | null {
+  if (lifecycleTestMode) return null;
   if (!pidAlive(pid)) return null;
   try {
     if (process.platform === "linux") {

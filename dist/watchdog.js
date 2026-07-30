@@ -9,6 +9,11 @@ import { join as join3 } from "node:path";
 // src/proc.ts
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+
+// src/lifecycle-mode.ts
+var lifecycleTestMode = false;
+
+// src/proc.ts
 var isWin = process.platform === "win32";
 var isMac = process.platform === "darwin";
 function pidAlive(pid) {
@@ -21,6 +26,7 @@ function pidAlive(pid) {
   }
 }
 function procStartToken(pid) {
+  if (lifecycleTestMode) return null;
   if (!pidAlive(pid)) return null;
   try {
     if (process.platform === "linux") {
@@ -392,6 +398,22 @@ function hosts() {
   return hostCache;
 }
 
+// src/dynhosts.ts
+import { readFileSync as readFileSync6, writeFileSync as writeFileSync4, renameSync as renameSync3, mkdirSync as mkdirSync4, existsSync as existsSync3 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { join as join5 } from "node:path";
+var dir2 = join5(homedir3(), ".pirate-radio");
+var path = join5(dir2, "dynamic-hosts.json");
+function dynamicHosts() {
+  if (!existsSync3(path)) return [];
+  try {
+    const arr = JSON.parse(readFileSync6(path, "utf8"));
+    return Array.isArray(arr) ? arr.filter((h) => typeof h === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 // src/watchdog.ts
 var anchorPid = Number(process.argv[2]);
 var anchorToken = process.argv[3] ? process.argv[3] : null;
@@ -410,10 +432,11 @@ function stopEverything() {
   for (const w of watchdogs) {
     if (w.pid !== process.pid) killPid(w.pid);
   }
-  for (const pid of findOrphanPlayers(hosts())) killPid(pid);
+  const matchHosts = lifecycleTestMode ? dynamicHosts() : hosts();
+  for (const pid of findOrphanPlayers(matchHosts)) killPid(pid);
   clearAnchor();
 }
-var POLL_MS = 3e3;
+var POLL_MS = lifecycleTestMode ? 50 : 3e3;
 var TOKEN_EVERY = 10;
 var tick = 0;
 var timer = setInterval(() => {

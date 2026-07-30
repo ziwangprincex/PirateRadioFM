@@ -1,36 +1,45 @@
-// Bundles each entrypoint into a single self-contained file under dist/, with the
-// @modelcontextprotocol/sdk (and everything else) inlined. This is what lets the
-// plugin ship ready-to-run from a GitHub marketplace: Claude Code copies dist/ +
-// data/ as-is and runs `node dist/index.js` — no `npm install`, no build step.
-//
-// Node built-ins stay external (esbuild's "node" platform handles that). The three
-// entrypoints stay separate files because they are spawned independently:
-//   index.js    — MCP server (Codex / Hermes / natural language)
-//   cli.js      — argv entry for slash commands
-//   watchdog.js — detached session watchdog, spawned by player.js via join(here,"watchdog.js")
+// Builds ready-to-run production bundles plus dedicated lifecycle-test bundles.
 import { build } from "esbuild";
 import { rm } from "node:fs/promises";
 
-// Clean previous output (e.g. stale per-module .js from an earlier `tsc` build)
-// so dist/ only ever contains the four self-contained bundles.
 await rm("dist", { recursive: true, force: true });
+await rm(".test-dist", { recursive: true, force: true });
 
-await build({
-  entryPoints: [
-    "src/index.ts",
-    "src/cli.ts",
-    "src/watchdog.ts",
-    "src/selfcheck.ts",
-  ],
+const shared = {
   bundle: true,
   platform: "node",
   target: "node20",
   format: "esm",
-  outdir: "dist",
-  // ESM output that uses require() indirectly (some deps) needs this shim so the
-  // bundled files still resolve CommonJS-style requires at runtime.
   banner: {
     js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);",
   },
   logLevel: "info",
+};
+
+await build({
+  ...shared,
+  entryPoints: ["src/index.ts", "src/cli.ts", "src/watchdog.ts", "src/selfcheck.ts"],
+  outdir: "dist",
+  define: { __RADIOHEAD_LIFECYCLE_TEST_MODE__: "false" },
+});
+
+// These bundles hard-code test mode at build time. They live in a separate
+// directory and are only invoked by lifecyclecheck.js; production bundles have
+// no runtime switch that can weaken process-token or orphan-sweep behavior.
+await build({
+  ...shared,
+  entryPoints: {
+    index: "src/index.ts",
+    watchdog: "src/watchdog.ts",
+    lifecyclecheck: "src/lifecyclecheck.ts",
+  },
+  outdir: ".test-dist/lifecycle",
+  define: { __RADIOHEAD_LIFECYCLE_TEST_MODE__: "true" },
+});
+
+await build({
+  ...shared,
+  entryPoints: { processcheck: "src/processcheck.ts" },
+  outdir: ".test-dist/lifecycle",
+  define: { __RADIOHEAD_LIFECYCLE_TEST_MODE__: "false" },
 });

@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 import { now, readAnchor, anchorAlive } from "./state.js";
 import { hosts } from "./stations.js";
 import { dynamicHosts } from "./dynhosts.js";
+import { lifecycleTestMode } from "./lifecycle-mode.js";
 import { killPid, findOrphanPlayers } from "./proc.js";
 import {
   addPlayer,
@@ -74,7 +75,8 @@ export function stop(): void {
 // lost track of (the original "music keeps playing after terminal close" bug).
 // dynamicHosts() covers podcast episode CDNs, which aren't in stations.json.
 function sweepOrphans(): void {
-  for (const pid of findOrphanPlayers([...hosts(), ...dynamicHosts()])) killPid(pid);
+  const matchHosts = lifecycleTestMode ? dynamicHosts() : [...hosts(), ...dynamicHosts()];
+  for (const pid of findOrphanPlayers(matchHosts)) killPid(pid);
 }
 
 const here = dirname(fileURLToPath(import.meta.url));

@@ -20,6 +20,11 @@ import { join as join3 } from "node:path";
 // src/proc.ts
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+
+// src/lifecycle-mode.ts
+var lifecycleTestMode = false;
+
+// src/proc.ts
 var isWin = process.platform === "win32";
 var isMac = process.platform === "darwin";
 function pidAlive(pid) {
@@ -32,6 +37,7 @@ function pidAlive(pid) {
   }
 }
 function procStartToken(pid) {
+  if (lifecycleTestMode) return null;
   if (!pidAlive(pid)) return null;
   try {
     if (process.platform === "linux") {
@@ -521,7 +527,8 @@ function stop() {
   sweepOrphans();
 }
 function sweepOrphans() {
-  for (const pid of findOrphanPlayers([...hosts(), ...dynamicHosts()])) killPid(pid);
+  const matchHosts = lifecycleTestMode ? dynamicHosts() : [...hosts(), ...dynamicHosts()];
+  for (const pid of findOrphanPlayers(matchHosts)) killPid(pid);
 }
 var here2 = dirname3(fileURLToPath2(import.meta.url));
 function play(url, volume) {

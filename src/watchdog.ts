@@ -18,6 +18,8 @@
 import { clearAnchor, readAnchor, type Anchor } from "./state.js";
 import { pidAlive, sameProcess, killPid, findOrphanPlayers } from "./proc.js";
 import { hosts } from "./stations.js";
+import { dynamicHosts } from "./dynhosts.js";
+import { lifecycleTestMode } from "./lifecycle-mode.js";
 import { drainAll, livePlayers } from "./registry.js";
 
 const anchorPid = Number(process.argv[2]);
@@ -46,7 +48,10 @@ function stopEverything(): void {
     if (w.pid !== process.pid) killPid(w.pid); // don't kill ourselves early
   }
   // Safety net: anything pointed at our hosts that escaped the registry.
-  for (const pid of findOrphanPlayers(hosts())) killPid(pid);
+  // Dedicated test bundles use only their isolated dynamic-host registry, never
+  // the real bundled station hosts.
+  const matchHosts = lifecycleTestMode ? dynamicHosts() : hosts();
+  for (const pid of findOrphanPlayers(matchHosts)) killPid(pid);
   clearAnchor();
 }
 
@@ -55,8 +60,8 @@ function stopEverything(): void {
 // pay for the token re-verify rarely. Trade-off: worst-case delay between
 // session-death and music-stop is POLL_MS * TOKEN_EVERY = 30s. If that ever
 // matters more than CPU, cut TOKEN_EVERY back down.
-const POLL_MS = 3000;
-const TOKEN_EVERY = 10; // re-verify token roughly every 30s
+const POLL_MS = lifecycleTestMode ? 50 : 3000;
+const TOKEN_EVERY = 10; // re-verify token roughly every 30s in production
 let tick = 0;
 
 const timer = setInterval(() => {

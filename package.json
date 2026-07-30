@@ -10,8 +10,9 @@
     "typecheck": "tsc --noEmit",
     "build": "node build.mjs",
     "start": "node dist/index.js",
-    "check": "tsc --noEmit && node build.mjs && node --test dist/selfcheck.js",
-    "check:stations": "node scripts/check-stations.mjs"
+    "check": "tsc --noEmit && node build.mjs && node --test dist/selfcheck.js .test-dist/lifecycle/lifecyclecheck.js",
+    "check:stations": "node scripts/check-stations.mjs",
+    "check:lifecycle": "node build.mjs && node --test .test-dist/lifecycle/lifecyclecheck.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0"

@@ -51,6 +51,7 @@ src/
   dynhosts.ts     动态 host（播客/HÖR CDN），也进 orphan sweep 匹配集，有上限。
   argparse.ts     CLI argv → tool args（按 schema 决定是否把 "50" 转成数字）。
   selfcheck.ts    node:test 测试套件（跑 `node --test dist/selfcheck.js`）。
+  lifecyclecheck.ts 跨进程生命周期集成测试（隔离 HOME，测试 bundle 写入 `.test-dist/`，不随插件发布）。
   sources/
     radio.ts       内置台切换。
     spotify.ts     OAuth PKCE + 远程控制已运行的 Spotify 客户端。最长、最脆。
@@ -83,7 +84,7 @@ docs/sources.md     各音源行为说明（中英双语）。
 **加一个内置电台 genre：**
 1. 在 `data/stations.json` 的 `genres` 下增加带 `label`、`description`、`stations` 的 genre；兼容旧命令时在 `aliases` 中映射。
 2. 在 `commands/` 加 `genrename.md`（照抄 `jazz.md`，改 `genre=genrename`）。
-3. `npm run check`（会验证 catalog schema、精确 genre 集合、aliases、host 唯一性和命令映射）。需要联网检查全部 stream 时另跑 `npm run check:stations`。
+3. `npm run check`（会验证 catalog schema、精确 genre 集合、aliases、host 唯一性、命令映射和生命周期集成测试）。需要联网检查全部 stream 时另跑 `npm run check:stations`。
 4. 如果这个 genre 要出现在 selfcheck 的 expected 列表里，去 `selfcheck.ts` 加上。
 5. `npm run build`，提交 src + dist + commands + data。
 
@@ -105,13 +106,13 @@ docs/sources.md     各音源行为说明（中英双语）。
 ```bash
 npm run typecheck          # tsc --noEmit
 npm run build              # esbuild → dist/（4 个 bundle）
-npm run check              # typecheck + build + node --test dist/selfcheck.js
+npm run check              # typecheck + build + selfcheck + lifecyclecheck
 node dist/cli.js doctor    # 环境诊断（player/yt-dlp/spotify/anchor/stream 连通性）
 node dist/cli.js radio_list
 node install.mjs --uninstall   # 注意：会真的改本机 agent 配置，别随便跑
 ```
 
-CI（`.github/workflows/ci.yml`）：ubuntu + windows + macos 三平台跑 `npm run check`，再验证 dist/ 同步。
+CI（`.github/workflows/ci.yml`）：ubuntu + windows + macos 三平台跑 `npm run check`，再验证 dist/ 同步。`.github/workflows/station-health.yml` 每周一 08:00 UTC 运行 `npm run check:stations`，与普通 PR CI 分离。
 
 ---
 

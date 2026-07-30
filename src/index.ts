@@ -41,6 +41,9 @@ if (prevAnchor && !anchorAlive(prevAnchor)) {
   now.state = "stopped";
   now.source = null;
   now.spotifyVerifier = null;
+  // Persist immediately. Otherwise the first tool call in the new session would
+  // fresh-load the stale "playing" state and undo this cleanup.
+  saveState();
 }
 
 writeAnchor(process.pid);
