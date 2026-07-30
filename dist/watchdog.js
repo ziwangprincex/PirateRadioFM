@@ -322,24 +322,71 @@ import { readFileSync as readFileSync5 } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname as dirname2, join as join4 } from "node:path";
 var here = dirname2(fileURLToPath(import.meta.url));
-var stations = {};
+var emptyCatalog = { version: 2, aliases: {}, genres: {} };
+var catalog = emptyCatalog;
 try {
-  stations = JSON.parse(readFileSync5(join4(here, "..", "data", "stations.json"), "utf8"));
+  const raw = JSON.parse(readFileSync5(join4(here, "..", "data", "stations.json"), "utf8"));
+  catalog = validateCatalog(raw);
 } catch (e) {
   process.stderr.write(`radiohead: failed to load stations.json \u2014 ${e.message}
 `);
+}
+function nonEmpty(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+function validateCatalog(value) {
+  if (!value || typeof value !== "object") throw new Error("catalog must be an object");
+  const raw = value;
+  if (raw.version !== 2) throw new Error(`unsupported catalog version: ${String(raw.version)}`);
+  if (!raw.aliases || typeof raw.aliases !== "object" || Array.isArray(raw.aliases))
+    throw new Error("aliases must be an object");
+  if (!raw.genres || typeof raw.genres !== "object" || Array.isArray(raw.genres))
+    throw new Error("genres must be an object");
+  const genres = {};
+  const seenUrls = /* @__PURE__ */ new Set();
+  for (const [id, candidate] of Object.entries(raw.genres)) {
+    if (!/^[a-z0-9-]+$/.test(id)) throw new Error(`invalid genre id: ${id}`);
+    if (!candidate || typeof candidate !== "object") throw new Error(`${id}: genre must be an object`);
+    const genre = candidate;
+    if (!nonEmpty(genre.label)) throw new Error(`${id}: label is required`);
+    if (!nonEmpty(genre.description)) throw new Error(`${id}: description is required`);
+    if (!Array.isArray(genre.stations) || genre.stations.length === 0)
+      throw new Error(`${id}: stations must be a non-empty array`);
+    const stations = genre.stations.map((candidateStation, index) => {
+      if (!candidateStation || typeof candidateStation !== "object")
+        throw new Error(`${id}[${index}]: station must be an object`);
+      const station = candidateStation;
+      if (!nonEmpty(station.name)) throw new Error(`${id}[${index}]: name is required`);
+      if (!nonEmpty(station.url)) throw new Error(`${id}[${index}]: url is required`);
+      let parsed;
+      try {
+        parsed = new URL(station.url);
+      } catch {
+        throw new Error(`${id}[${index}]: invalid URL`);
+      }
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+        throw new Error(`${id}[${index}]: URL must be HTTP(S)`);
+      if (seenUrls.has(station.url)) throw new Error(`${id}[${index}]: duplicate URL ${station.url}`);
+      seenUrls.add(station.url);
+      return { name: station.name, url: station.url };
+    });
+    genres[id] = { label: genre.label, description: genre.description, stations };
+  }
+  const aliases = {};
+  for (const [alias, target] of Object.entries(raw.aliases)) {
+    if (!/^[a-z0-9-]+$/.test(alias) || !nonEmpty(target)) throw new Error(`invalid alias: ${alias}`);
+    if (genres[alias]) throw new Error(`alias conflicts with genre: ${alias}`);
+    if (!genres[target]) throw new Error(`alias ${alias} targets unknown genre ${target}`);
+    aliases[alias] = target;
+  }
+  return { version: 2, aliases, genres };
 }
 var hostCache = null;
 function hosts() {
   if (hostCache) return hostCache;
   const set = /* @__PURE__ */ new Set();
-  for (const list of Object.values(stations)) {
-    for (const st of list) {
-      try {
-        set.add(new URL(st.url).host.toLowerCase());
-      } catch {
-      }
-    }
+  for (const genre of Object.values(catalog.genres)) {
+    for (const station of genre.stations) set.add(new URL(station.url).host.toLowerCase());
   }
   hostCache = [...set];
   return hostCache;

@@ -1,5 +1,5 @@
 ---
-description: Play lofi / downtempo radio
+description: Alias for /chill ? play chill / downtempo radio
 allowed-tools: Bash(node:*)
 ---
 !`node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" radio_play genre=lofi`

@@ -23,7 +23,7 @@ export const tools: Tool[] = [
   {
     name: "radio_play",
     // Genre list derived from the station data so it never drifts out of sync.
-    description: `Play a built-in genre radio station. Genres: ${radio.genres().join(", ")}.`,
+    description: `Play a built-in genre radio station. Genres: ${radio.genres().join(", ")}. Compatibility aliases: lofi, npr.`,
     schema: { type: "object", properties: { genre: { type: "string" } }, required: ["genre"] },
     handler: async (a) => {
       const st = await radio.playGenre(String(a.genre));

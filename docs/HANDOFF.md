@@ -1,4 +1,4 @@
-# PirateRadioFM — 交接文档 / Handoff
+﻿# PirateRadioFM — 交接文档 / Handoff
 
 > 给未来接手改代码的人（或 AI model）看的。目标：**5 分钟内理解这个项目的核心难点、不变量、以及"改 X 要动哪些文件"。**
 > 最后更新：2026-07（HÖR cookie 认证修复、文档补全）。
@@ -70,7 +70,7 @@ docs/sources.md     各音源行为说明（中英双语）。
 ## 4. 关键不变量（别破坏）
 
 - **dist/ 必须与 src/ 同步且行尾符为 LF。** 改了 src/ 一定跑 `npm run build` 并把 dist/ 一起提交。CI 有一步验证 dist/ 是否与 src/ 编译结果一致（在 ubuntu 上跑）。`.gitattributes` 保证 Windows checkout 后 dist/ 不显示假脏——**别删它**。
-- **单一真相源**：genre 列表、host 列表都从 `data/stations.json` 派生（`radio_play` 的 description、`install.mjs` 的 SKILL.md genre 行、`hosts()`）。加台只改 stations.json，别在别处手抄一份（历史上 install.mjs 手抄漏了 `npr`，已改成派生）。
+- **单一真相源**：genre metadata、兼容 aliases、stream 和 host 列表都从 `data/stations.json` 派生（`radio_play` 的 description、`install.mjs` 的 SKILL.md genre 行、`hosts()`）。加台只改 stations.json，别在别处手抄一份（历史上 install.mjs 手抄漏了 `npr`，已改成派生）。
 - **命令自动分发**：加 slash command = 在 `commands/` 加一个 `.md`（照抄现有格式）+ 在 `tools.ts` 加对应 tool。`install.mjs` 会自动把它装到所有 agent，**不用改 install.mjs**。
 - **tool handler 通过 withState() 包裹**（见 index.ts / cli.ts）：入口 fresh-load state、出口原子保存，全程持锁。**例外**：`doctor` 只读，在 cli.ts 里走独立分支跳过锁。
 - **用户意图优先于远程调用成败**：pause/stop/volume 即使底层 API 失败也要更新 `now.state`（否则 `now-playing` 会撒谎）。见 tools.ts 里的 `try { ... } catch { /* keep going */ }` 模式。
@@ -81,9 +81,9 @@ docs/sources.md     各音源行为说明（中英双语）。
 ## 5. 常见改动配方
 
 **加一个内置电台 genre：**
-1. 在 `data/stations.json` 加 `"genrename": [{"name": "...", "url": "..."}]`。
+1. 在 `data/stations.json` 的 `genres` 下增加带 `label`、`description`、`stations` 的 genre；兼容旧命令时在 `aliases` 中映射。
 2. 在 `commands/` 加 `genrename.md`（照抄 `jazz.md`，改 `genre=genrename`）。
-3. `npm run check`（会验证 genre 数、host 唯一性、命令映射）。
+3. `npm run check`（会验证 catalog schema、精确 genre 集合、aliases、host 唯一性和命令映射）。需要联网检查全部 stream 时另跑 `npm run check:stations`。
 4. 如果这个 genre 要出现在 selfcheck 的 expected 列表里，去 `selfcheck.ts` 加上。
 5. `npm run build`，提交 src + dist + commands + data。
 

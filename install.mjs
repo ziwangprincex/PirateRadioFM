@@ -62,7 +62,8 @@ const commands = readdirSync(join(root, "commands"))
 // or corrupt file rather than aborting the install.
 let radioGenres = "";
 try {
-  radioGenres = Object.keys(JSON.parse(readFileSync(join(root, "data", "stations.json"), "utf8"))).join(", ");
+  const catalog = JSON.parse(readFileSync(join(root, "data", "stations.json"), "utf8"));
+  radioGenres = [...Object.keys(catalog.genres ?? {}), ...Object.keys(catalog.aliases ?? {})].join(", ");
 } catch {
   /* leave empty — the note just omits the explicit list */
 }

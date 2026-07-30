@@ -11,21 +11,25 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as radio from "./sources/radio.js";
 import * as player from "./player.js";
-import { hosts } from "./stations.js";
+import { acceptedGenres, catalogVersion, hosts, resolveGenre } from "./stations.js";
 import { parseArgs } from "./argparse.js";
 import { tools } from "./tools.js";
 import { parseFeed, embeddedDirectUrl } from "./sources/podcast.js";
 import { escapeAS } from "./sources/applemusic.js";
 import { describe, now } from "./state.js";
 
-test("station data: every expected genre loads", () => {
+test("station catalog: exact genres, aliases, and schema version", () => {
   const expected = [
-    "jazz", "classical", "indie", "rock", "country", "pop",
-    "ambient", "lofi", "soul", "eighties", "world", "house", "techno",
-    "kexp", "kcrw", "wfmu", "nts", "wwoz", "paradise", "npr",
+    "jazz", "classical", "indie", "covers", "rock", "metal", "country", "pop",
+    "ambient", "chill", "soul", "lounge", "eighties", "world", "folk", "house",
+    "techno", "bass", "kexp", "kcrw", "wfmu", "nts", "wwoz", "paradise", "public",
   ];
-  const got = radio.genres();
-  for (const g of expected) assert.ok(got.includes(g), `missing genre: ${g}`);
+  assert.strictEqual(catalogVersion(), 2);
+  assert.deepStrictEqual(radio.genres(), expected);
+  assert.strictEqual(resolveGenre("lofi"), "chill");
+  assert.strictEqual(resolveGenre("npr"), "public");
+  assert.ok(acceptedGenres().includes("lofi"));
+  assert.ok(acceptedGenres().includes("npr"));
 });
 
 test("hosts() is non-empty and unique", () => {

@@ -370,30 +370,92 @@ import { readFileSync as readFileSync5 } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname as dirname2, join as join4 } from "node:path";
 var here = dirname2(fileURLToPath(import.meta.url));
-var stations = {};
+var emptyCatalog = { version: 2, aliases: {}, genres: {} };
+var catalog = emptyCatalog;
 try {
-  stations = JSON.parse(readFileSync5(join4(here, "..", "data", "stations.json"), "utf8"));
+  const raw = JSON.parse(readFileSync5(join4(here, "..", "data", "stations.json"), "utf8"));
+  catalog = validateCatalog(raw);
 } catch (e) {
   process.stderr.write(`radiohead: failed to load stations.json \u2014 ${e.message}
 `);
 }
+function nonEmpty(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+function validateCatalog(value) {
+  if (!value || typeof value !== "object") throw new Error("catalog must be an object");
+  const raw = value;
+  if (raw.version !== 2) throw new Error(`unsupported catalog version: ${String(raw.version)}`);
+  if (!raw.aliases || typeof raw.aliases !== "object" || Array.isArray(raw.aliases))
+    throw new Error("aliases must be an object");
+  if (!raw.genres || typeof raw.genres !== "object" || Array.isArray(raw.genres))
+    throw new Error("genres must be an object");
+  const genres3 = {};
+  const seenUrls = /* @__PURE__ */ new Set();
+  for (const [id, candidate] of Object.entries(raw.genres)) {
+    if (!/^[a-z0-9-]+$/.test(id)) throw new Error(`invalid genre id: ${id}`);
+    if (!candidate || typeof candidate !== "object") throw new Error(`${id}: genre must be an object`);
+    const genre = candidate;
+    if (!nonEmpty(genre.label)) throw new Error(`${id}: label is required`);
+    if (!nonEmpty(genre.description)) throw new Error(`${id}: description is required`);
+    if (!Array.isArray(genre.stations) || genre.stations.length === 0)
+      throw new Error(`${id}: stations must be a non-empty array`);
+    const stations2 = genre.stations.map((candidateStation, index) => {
+      if (!candidateStation || typeof candidateStation !== "object")
+        throw new Error(`${id}[${index}]: station must be an object`);
+      const station = candidateStation;
+      if (!nonEmpty(station.name)) throw new Error(`${id}[${index}]: name is required`);
+      if (!nonEmpty(station.url)) throw new Error(`${id}[${index}]: url is required`);
+      let parsed;
+      try {
+        parsed = new URL(station.url);
+      } catch {
+        throw new Error(`${id}[${index}]: invalid URL`);
+      }
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+        throw new Error(`${id}[${index}]: URL must be HTTP(S)`);
+      if (seenUrls.has(station.url)) throw new Error(`${id}[${index}]: duplicate URL ${station.url}`);
+      seenUrls.add(station.url);
+      return { name: station.name, url: station.url };
+    });
+    genres3[id] = { label: genre.label, description: genre.description, stations: stations2 };
+  }
+  const aliases = {};
+  for (const [alias, target] of Object.entries(raw.aliases)) {
+    if (!/^[a-z0-9-]+$/.test(alias) || !nonEmpty(target)) throw new Error(`invalid alias: ${alias}`);
+    if (genres3[alias]) throw new Error(`alias conflicts with genre: ${alias}`);
+    if (!genres3[target]) throw new Error(`alias ${alias} targets unknown genre ${target}`);
+    aliases[alias] = target;
+  }
+  return { version: 2, aliases, genres: genres3 };
+}
 function all() {
-  return stations;
+  return Object.fromEntries(Object.entries(catalog.genres).map(([id, genre]) => [id, genre.stations]));
 }
 function genres() {
-  return Object.keys(stations);
+  return Object.keys(catalog.genres);
+}
+function acceptedGenres() {
+  return [...genres(), ...Object.keys(catalog.aliases)];
+}
+function resolveGenre(input) {
+  const id = input.trim().toLowerCase();
+  if (catalog.genres[id]) return id;
+  return catalog.aliases[id] ?? null;
+}
+function genreInfo(id) {
+  const resolved = resolveGenre(id);
+  return resolved ? catalog.genres[resolved] : null;
+}
+function catalogVersion() {
+  return catalog.version;
 }
 var hostCache = null;
 function hosts() {
   if (hostCache) return hostCache;
   const set = /* @__PURE__ */ new Set();
-  for (const list2 of Object.values(stations)) {
-    for (const st of list2) {
-      try {
-        set.add(new URL(st.url).host.toLowerCase());
-      } catch {
-      }
-    }
+  for (const genre of Object.values(catalog.genres)) {
+    for (const station of genre.stations) set.add(new URL(station.url).host.toLowerCase());
   }
   hostCache = [...set];
   return hostCache;
@@ -871,20 +933,19 @@ function nowPlayingLine2() {
 }
 
 // src/sources/radio.ts
-var stations2 = all();
+var stations = all();
 function genres2() {
   return genres();
 }
 function list() {
-  return genres2().map((g) => `${g} (${stations2[g].length} station${stations2[g].length > 1 ? "s" : ""})`).join(", ");
-}
-function normalize(genre) {
-  const g = genre.trim().toLowerCase();
-  return genres2().includes(g) ? g : null;
+  return genres2().map((g) => {
+    const info = genreInfo(g);
+    return `${g} \u2014 ${info.label} (${stations[g].length} station${stations[g].length > 1 ? "s" : ""})`;
+  }).join(", ");
 }
 async function playGenre(genre, index = 0) {
-  const g = normalize(genre);
-  if (!g) throw new Error(`Unknown genre "${genre}". Available: ${genres2().join(", ")}`);
+  const g = resolveGenre(genre);
+  if (!g) throw new Error(`Unknown genre "${genre}". Available: ${acceptedGenres().join(", ")}`);
   if (now.source === "spotify") {
     try {
       await pause();
@@ -892,9 +953,9 @@ async function playGenre(genre, index = 0) {
     }
   }
   if (now.source === "applemusic") pauseIfRunning();
-  const len = stations2[g].length;
+  const len = stations[g].length;
   const i = (Math.trunc(index) % len + len) % len;
-  const st = stations2[g][i];
+  const st = stations[g][i];
   play(st.url, now.volume);
   now.state = "playing";
   now.source = "radio";
@@ -911,8 +972,10 @@ async function next2() {
 async function prev2() {
   if (now.source !== "radio" || !now.genre)
     throw new Error("No radio station is playing.");
-  const len = stations2[now.genre].length;
-  return playGenre(now.genre, (now.stationIndex - 1 + len) % len);
+  const genre = resolveGenre(now.genre);
+  if (!genre) throw new Error(`Unknown saved genre "${now.genre}".`);
+  const len = stations[genre].length;
+  return playGenre(genre, (now.stationIndex - 1 + len) % len);
 }
 
 // src/argparse.ts
@@ -1190,8 +1253,8 @@ function checkPlayers() {
   return { level: "ok", label: "Tracked players", detail: n === 0 ? "none playing" : `${n} live` };
 }
 async function checkStream() {
-  const stations3 = all();
-  const first = Object.values(stations3).flat()[0];
+  const stations2 = all();
+  const first = Object.values(stations2).flat()[0];
   if (!first) return { level: "fail", label: "Stream reachability", detail: "no stations loaded (stations.json missing?)" };
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), 6e3);
@@ -1240,7 +1303,7 @@ ${describe()}`
   {
     name: "radio_play",
     // Genre list derived from the station data so it never drifts out of sync.
-    description: `Play a built-in genre radio station. Genres: ${genres2().join(", ")}.`,
+    description: `Play a built-in genre radio station. Genres: ${genres2().join(", ")}. Compatibility aliases: lofi, npr.`,
     schema: { type: "object", properties: { genre: { type: "string" } }, required: ["genre"] },
     handler: async (a) => {
       const st = await playGenre(String(a.genre));
@@ -1482,31 +1545,40 @@ ${loginUrl()}`
 ];
 
 // src/selfcheck.ts
-test("station data: every expected genre loads", () => {
+test("station catalog: exact genres, aliases, and schema version", () => {
   const expected = [
     "jazz",
     "classical",
     "indie",
+    "covers",
     "rock",
+    "metal",
     "country",
     "pop",
     "ambient",
-    "lofi",
+    "chill",
     "soul",
+    "lounge",
     "eighties",
     "world",
+    "folk",
     "house",
     "techno",
+    "bass",
     "kexp",
     "kcrw",
     "wfmu",
     "nts",
     "wwoz",
     "paradise",
-    "npr"
+    "public"
   ];
-  const got = genres2();
-  for (const g of expected) assert.ok(got.includes(g), `missing genre: ${g}`);
+  assert.strictEqual(catalogVersion(), 2);
+  assert.deepStrictEqual(genres2(), expected);
+  assert.strictEqual(resolveGenre("lofi"), "chill");
+  assert.strictEqual(resolveGenre("npr"), "public");
+  assert.ok(acceptedGenres().includes("lofi"));
+  assert.ok(acceptedGenres().includes("npr"));
 });
 test("hosts() is non-empty and unique", () => {
   const h = hosts();

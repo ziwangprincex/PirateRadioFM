@@ -16,7 +16,7 @@ how each works, what it needs, and its known limits.
 | **HÖR** | local mpv/ffplay via yt-dlp | yt-dlp + YouTube cookies | all |
 
 `/pause` `/resume` `/next` `/prev` `/volume` `/stop` `/now-playing` work for all
-four sources — they dispatch on whatever is currently playing. Switching sources
+all five sources — they dispatch on whatever is currently playing. Switching sources
 silences the previous one automatically; you never get two audio streams at once.
 
 ## Podcast

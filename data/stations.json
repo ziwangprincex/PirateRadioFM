@@ -1,81 +1,315 @@
 {
-  "jazz": [
-    { "name": "Radio Swiss Jazz", "url": "https://stream.srg-ssr.ch/m/rsj/mp3_128" },
-    { "name": "SomaFM Sonic Universe", "url": "https://ice4.somafm.com/sonicuniverse-128-mp3" }
-  ],
-  "classical": [
-    { "name": "Venice Classic Radio", "url": "https://uk2.streamingpulse.com/ssl/vcr1" },
-    { "name": "Radio Swiss Classic", "url": "https://stream.srg-ssr.ch/m/rsc_de/mp3_128" }
-  ],
-  "indie": [
-    { "name": "SomaFM Indie Pop Rocks", "url": "https://ice4.somafm.com/indiepop-128-mp3" },
-    { "name": "SomaFM Covers", "url": "https://ice4.somafm.com/covers-128-mp3" }
-  ],
-  "rock": [
-    { "name": "SomaFM Left Coast 70s", "url": "https://ice4.somafm.com/seventies-128-mp3" },
-    { "name": "SomaFM Metal Detector", "url": "https://ice4.somafm.com/metal-128-mp3" }
-  ],
-  "country": [
-    { "name": "SomaFM Boot Liquor", "url": "https://ice4.somafm.com/bootliquor-128-mp3" }
-  ],
-  "pop": [
-    { "name": "SomaFM PopTron", "url": "https://ice4.somafm.com/poptron-128-mp3" }
-  ],
-  "ambient": [
-    { "name": "SomaFM Drone Zone", "url": "https://ice4.somafm.com/dronezone-128-mp3" },
-    { "name": "SomaFM Space Station Soma", "url": "https://ice4.somafm.com/spacestation-128-mp3" },
-    { "name": "SomaFM Deep Space One", "url": "https://ice4.somafm.com/deepspaceone-128-mp3" }
-  ],
-  "lofi": [
-    { "name": "SomaFM Groove Salad", "url": "https://ice4.somafm.com/groovesalad-128-mp3" },
-    { "name": "SomaFM Fluid", "url": "https://ice4.somafm.com/fluid-128-mp3" },
-    { "name": "SomaFM Lush", "url": "https://ice4.somafm.com/lush-128-mp3" }
-  ],
-  "soul": [
-    { "name": "SomaFM Seven Inch Soul", "url": "https://ice4.somafm.com/7soul-128-mp3" },
-    { "name": "SomaFM Illinois Street Lounge", "url": "https://ice4.somafm.com/illstreet-128-mp3" }
-  ],
-  "eighties": [
-    { "name": "SomaFM Underground 80s", "url": "https://ice4.somafm.com/u80s-128-mp3" }
-  ],
-  "world": [
-    { "name": "SomaFM ThistleRadio", "url": "https://ice4.somafm.com/thistle-128-mp3" },
-    { "name": "SomaFM Folk Forward", "url": "https://ice4.somafm.com/folkfwd-128-mp3" },
-    { "name": "SomaFM Suburbs of Goa", "url": "https://ice4.somafm.com/suburbsofgoa-128-mp3" }
-  ],
-  "house": [
-    { "name": "SomaFM The Trip", "url": "https://ice4.somafm.com/thetrip-128-mp3" },
-    { "name": "SomaFM Beat Blender", "url": "https://ice4.somafm.com/beatblender-128-mp3" }
-  ],
-  "techno": [
-    { "name": "SomaFM cliqhop idm", "url": "https://ice4.somafm.com/cliqhop-128-mp3" },
-    { "name": "SomaFM Dub Step Beyond", "url": "https://ice4.somafm.com/dubstep-128-mp3" }
-  ],
-  "kexp": [
-    { "name": "KEXP 90.3 Seattle", "url": "https://kexp-mp3-128.streamguys1.com/kexp128.mp3" }
-  ],
-  "npr": [
-    { "name": "The Current 89.3 (Minnesota Public Radio)", "url": "https://current.stream.publicradio.org/current.mp3" },
-    { "name": "WXPN 88.5 Philadelphia", "url": "https://wxpnhi.xpn.org/xpnhi" },
-    { "name": "KUTX 98.9 Austin", "url": "https://streams.kut.org/4428_192.mp3" },
-    { "name": "WFUV 90.7 New York", "url": "https://onair.wfuv.org/onair-aacplus" }
-  ],
-  "kcrw": [
-    { "name": "KCRW Eclectic24", "url": "https://streams.kcrw.com/e24_mp3" }
-  ],
-  "wfmu": [
-    { "name": "WFMU Freeform", "url": "https://stream0.wfmu.org/freeform-128k" }
-  ],
-  "nts": [
-    { "name": "NTS 1 London", "url": "https://stream-relay-geo.ntslive.net/stream" },
-    { "name": "NTS 2 London", "url": "https://stream-relay-geo.ntslive.net/stream2" }
-  ],
-  "wwoz": [
-    { "name": "WWOZ 90.7 New Orleans", "url": "https://wwoz-sc.streamguys1.com/wwoz-hi.mp3" }
-  ],
-  "paradise": [
-    { "name": "Radio Paradise Main Mix", "url": "https://stream.radioparadise.com/mp3-128" },
-    { "name": "Radio Paradise Mellow Mix", "url": "https://stream.radioparadise.com/mellow-128" },
-    { "name": "Radio Paradise Rock Mix", "url": "https://stream.radioparadise.com/rock-128" }
-  ]
+  "version": 2,
+  "aliases": {
+    "lofi": "chill",
+    "npr": "public"
+  },
+  "genres": {
+    "jazz": {
+      "label": "Jazz",
+      "description": "Traditional, contemporary, and avant-garde jazz.",
+      "stations": [
+        {
+          "name": "Radio Swiss Jazz",
+          "url": "https://stream.srg-ssr.ch/m/rsj/mp3_128"
+        },
+        {
+          "name": "SomaFM Sonic Universe",
+          "url": "https://ice4.somafm.com/sonicuniverse-128-mp3"
+        }
+      ]
+    },
+    "classical": {
+      "label": "Classical",
+      "description": "Classical music from orchestral works to chamber music.",
+      "stations": [
+        {
+          "name": "Venice Classic Radio",
+          "url": "https://uk2.streamingpulse.com/ssl/vcr1"
+        },
+        {
+          "name": "Radio Swiss Classic",
+          "url": "https://stream.srg-ssr.ch/m/rsc_de/mp3_128"
+        }
+      ]
+    },
+    "indie": {
+      "label": "Indie",
+      "description": "Indie pop and alternative rock.",
+      "stations": [
+        {
+          "name": "SomaFM Indie Pop Rocks",
+          "url": "https://ice4.somafm.com/indiepop-128-mp3"
+        }
+      ]
+    },
+    "covers": {
+      "label": "Covers",
+      "description": "Familiar songs reinterpreted by different artists.",
+      "stations": [
+        {
+          "name": "SomaFM Covers",
+          "url": "https://ice4.somafm.com/covers-128-mp3"
+        }
+      ]
+    },
+    "rock": {
+      "label": "Rock",
+      "description": "Classic and album-oriented rock.",
+      "stations": [
+        {
+          "name": "SomaFM Left Coast 70s",
+          "url": "https://ice4.somafm.com/seventies-128-mp3"
+        }
+      ]
+    },
+    "metal": {
+      "label": "Metal",
+      "description": "Heavy music from doom and thrash to progressive and industrial metal.",
+      "stations": [
+        {
+          "name": "SomaFM Metal Detector",
+          "url": "https://ice4.somafm.com/metal-128-mp3"
+        }
+      ]
+    },
+    "country": {
+      "label": "Country / Americana",
+      "description": "Country, Americana, and roots music.",
+      "stations": [
+        {
+          "name": "SomaFM Boot Liquor",
+          "url": "https://ice4.somafm.com/bootliquor-128-mp3"
+        }
+      ]
+    },
+    "pop": {
+      "label": "Pop",
+      "description": "Electropop, indie dance, and modern pop.",
+      "stations": [
+        {
+          "name": "SomaFM PopTron",
+          "url": "https://ice4.somafm.com/poptron-128-mp3"
+        }
+      ]
+    },
+    "ambient": {
+      "label": "Ambient",
+      "description": "Atmospheric, space, drone, and ambient electronic music.",
+      "stations": [
+        {
+          "name": "SomaFM Drone Zone",
+          "url": "https://ice4.somafm.com/dronezone-128-mp3"
+        },
+        {
+          "name": "SomaFM Space Station Soma",
+          "url": "https://ice4.somafm.com/spacestation-128-mp3"
+        },
+        {
+          "name": "SomaFM Deep Space One",
+          "url": "https://ice4.somafm.com/deepspaceone-128-mp3"
+        }
+      ]
+    },
+    "chill": {
+      "label": "Chill / Downtempo",
+      "description": "Downtempo beats, instrumental hip-hop, future soul, and mellow electronic vocals.",
+      "stations": [
+        {
+          "name": "SomaFM Groove Salad",
+          "url": "https://ice4.somafm.com/groovesalad-128-mp3"
+        },
+        {
+          "name": "SomaFM Fluid",
+          "url": "https://ice4.somafm.com/fluid-128-mp3"
+        },
+        {
+          "name": "SomaFM Lush",
+          "url": "https://ice4.somafm.com/lush-128-mp3"
+        }
+      ]
+    },
+    "soul": {
+      "label": "Soul",
+      "description": "Vintage soul and original 45 RPM recordings.",
+      "stations": [
+        {
+          "name": "SomaFM Seven Inch Soul",
+          "url": "https://ice4.somafm.com/7soul-128-mp3"
+        }
+      ]
+    },
+    "lounge": {
+      "label": "Lounge",
+      "description": "Exotica, bachelor-pad, and vintage lounge music.",
+      "stations": [
+        {
+          "name": "SomaFM Illinois Street Lounge",
+          "url": "https://ice4.somafm.com/illstreet-128-mp3"
+        }
+      ]
+    },
+    "eighties": {
+      "label": "80s",
+      "description": "Early-80s synthpop, new wave, and alternative music.",
+      "stations": [
+        {
+          "name": "SomaFM Underground 80s",
+          "url": "https://ice4.somafm.com/u80s-128-mp3"
+        }
+      ]
+    },
+    "world": {
+      "label": "World",
+      "description": "Celtic roots and South Asian-influenced world beats.",
+      "stations": [
+        {
+          "name": "SomaFM ThistleRadio",
+          "url": "https://ice4.somafm.com/thistle-128-mp3"
+        },
+        {
+          "name": "SomaFM Suburbs of Goa",
+          "url": "https://ice4.somafm.com/suburbsofgoa-128-mp3"
+        }
+      ]
+    },
+    "folk": {
+      "label": "Folk",
+      "description": "Indie folk, alternative folk, and selected folk classics.",
+      "stations": [
+        {
+          "name": "SomaFM Folk Forward",
+          "url": "https://ice4.somafm.com/folkfwd-128-mp3"
+        }
+      ]
+    },
+    "house": {
+      "label": "House",
+      "description": "Progressive house, trance, deep house, and downtempo electronic music.",
+      "stations": [
+        {
+          "name": "SomaFM The Trip",
+          "url": "https://ice4.somafm.com/thetrip-128-mp3"
+        },
+        {
+          "name": "SomaFM Beat Blender",
+          "url": "https://ice4.somafm.com/beatblender-128-mp3"
+        }
+      ]
+    },
+    "techno": {
+      "label": "Techno / IDM",
+      "description": "Intelligent dance music and experimental beat-driven electronic music.",
+      "stations": [
+        {
+          "name": "SomaFM cliqhop idm",
+          "url": "https://ice4.somafm.com/cliqhop-128-mp3"
+        }
+      ]
+    },
+    "bass": {
+      "label": "Bass / Dubstep",
+      "description": "Dubstep, dub, and deep bass.",
+      "stations": [
+        {
+          "name": "SomaFM Dub Step Beyond",
+          "url": "https://ice4.somafm.com/dubstep-128-mp3"
+        }
+      ]
+    },
+    "kexp": {
+      "label": "KEXP",
+      "description": "DJ-curated independent and alternative music from Seattle.",
+      "stations": [
+        {
+          "name": "KEXP 90.3 Seattle",
+          "url": "https://kexp-mp3-128.streamguys1.com/kexp128.mp3"
+        }
+      ]
+    },
+    "kcrw": {
+      "label": "KCRW Eclectic24",
+      "description": "A hand-curated eclectic music mix from KCRW.",
+      "stations": [
+        {
+          "name": "KCRW Eclectic24",
+          "url": "https://streams.kcrw.com/e24_mp3"
+        }
+      ]
+    },
+    "wfmu": {
+      "label": "WFMU Freeform",
+      "description": "Independent freeform radio from New Jersey.",
+      "stations": [
+        {
+          "name": "WFMU Freeform",
+          "url": "https://stream0.wfmu.org/freeform-128k"
+        }
+      ]
+    },
+    "nts": {
+      "label": "NTS",
+      "description": "Global underground music, club culture, and experimental radio.",
+      "stations": [
+        {
+          "name": "NTS 1 London",
+          "url": "https://stream-relay-geo.ntslive.net/stream"
+        },
+        {
+          "name": "NTS 2 London",
+          "url": "https://stream-relay-geo.ntslive.net/stream2"
+        }
+      ]
+    },
+    "wwoz": {
+      "label": "WWOZ",
+      "description": "New Orleans jazz, blues, roots, and local music.",
+      "stations": [
+        {
+          "name": "WWOZ 90.7 New Orleans",
+          "url": "https://wwoz-sc.streamguys1.com/wwoz-hi.mp3"
+        }
+      ]
+    },
+    "paradise": {
+      "label": "Radio Paradise",
+      "description": "Listener-supported, hand-curated eclectic, mellow, and rock mixes.",
+      "stations": [
+        {
+          "name": "Radio Paradise Main Mix",
+          "url": "https://stream.radioparadise.com/mp3-128"
+        },
+        {
+          "name": "Radio Paradise Mellow Mix",
+          "url": "https://stream.radioparadise.com/mellow-128"
+        },
+        {
+          "name": "Radio Paradise Rock Mix",
+          "url": "https://stream.radioparadise.com/rock-128"
+        }
+      ]
+    },
+    "public": {
+      "label": "US Public Music Radio",
+      "description": "Listener-supported US public music stations focused on music discovery.",
+      "stations": [
+        {
+          "name": "The Current 89.3 (Minnesota Public Radio)",
+          "url": "https://current.stream.publicradio.org/current.mp3"
+        },
+        {
+          "name": "WXPN 88.5 Philadelphia",
+          "url": "https://wxpnhi.xpn.org/xpnhi"
+        },
+        {
+          "name": "KUTX 98.9 Austin",
+          "url": "https://streams.kut.org/4428_192.mp3"
+        },
+        {
+          "name": "WFUV 90.7 New York",
+          "url": "https://onair.wfuv.org/onair-aacplus"
+        }
+      ]
+    }
+  }
 }

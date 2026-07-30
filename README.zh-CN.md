@@ -2,7 +2,7 @@
 
 # PirateRadioFM
 
-在 CLI 编程 agent 里放网络电台。
+在 CLI 编程 agent 里播放网络电台、播客、Spotify 和 Apple Music。
 
 [English](./README.md)
 
@@ -47,8 +47,7 @@ node install.mjs
 - Hermes：MCP server 写进 `~/.hermes/config.yaml`
 - pi：prompt 模板写进 `~/.pi/agent/prompts/`，skill 写进 `~/.pi/agent/skills/radiohead/`
 
-pi 不支持 MCP，命令直接调用 `dist/cli.js`，所以会话结束时音乐不会自动停，
-需要用 `/stop`。
+pi 不支持 MCP，因此命令直接调用 `dist/cli.js`。
 
 ## 命令
 
@@ -58,17 +57,22 @@ pi 不支持 MCP，命令直接调用 `dist/cli.js`，所以会话结束时音�
 |---|---|
 | `/jazz` | 爵士 |
 | `/classical` | 古典 |
-| `/indie` | 独立音乐 |
-| `/rock` | 摇滚 |
-| `/country` | 乡村 |
-| `/pop` | 流行 |
-| `/ambient` | 氛围 |
-| `/lofi` | lo-fi |
-| `/soul` | 灵魂乐 |
-| `/eighties` | 80 年代 |
-| `/world` | 世界音乐 |
-| `/house` | 浩室 |
+| `/indie` | 独立流行 / 另类 |
+| `/covers` | 翻唱歌曲 |
+| `/rock` | 经典 / 专辑摇滚 |
+| `/metal` | 金属 |
+| `/country` | 乡村 / Americana |
+| `/pop` | 流行 / 电子流行 |
+| `/ambient` | 氛围 / drone / 太空音乐 |
+| `/chill` | 驰放 / 缓拍（`/lofi` 保留为别名） |
+| `/soul` | 复古灵魂乐 |
+| `/lounge` | lounge / exotica |
+| `/eighties` | 80 年代 synthpop / new wave |
+| `/world` | 凯尔特与南亚风格世界音乐 |
+| `/folk` | 独立 / 另类民谣 |
+| `/house` | progressive / deep house |
 | `/techno` | techno / IDM |
+| `/bass` | dubstep / dub / deep bass |
 
 ### DJ / 公共电台
 
@@ -76,11 +80,11 @@ pi 不支持 MCP，命令直接调用 `dist/cli.js`，所以会话结束时音�
 |---|---|
 | `/kexp` | KEXP 90.3，西雅图 |
 | `/kcrw` | KCRW Eclectic24，洛杉矶 |
-| `/wfmu` | WFMU 自由派，新泽西 |
+| `/wfmu` | WFMU 自由编排电台，新泽西 |
 | `/nts` | NTS，伦敦 |
 | `/wwoz` | WWOZ，新奥尔良，爵士和蓝调 |
 | `/paradise` | Radio Paradise |
-| `/npr` | NPR 音乐台 — The Current、WXPN、KUTX、WFUV（`/next` 轮换） |
+| `/public` | 美国公共音乐电台 — The Current、WXPN、KUTX、WFUV（`/next` 轮换；`/npr` 保留为别名） |
 | `/hoer` | HÖR 柏林 — 直播时段放 DJ 直播，其余时间放最新场次（[配置指南](./docs/sources.md#hör-berlin)） |
 
 ### 播放控制
@@ -97,7 +101,7 @@ pi 不支持 MCP，命令直接调用 `dist/cli.js`，所以会话结束时音�
 | `/now-playing` | 显示正在播放什么 |
 | `/doctor` | 诊断播放问题（播放器、yt-dlp、Spotify、电台连通性） |
 
-`/nts`、`/paradise`、`/npr` 有多个频道，用 `/next` 切换。
+`/nts`、`/paradise`、`/public` 有多个频道，用 `/next` 切换。
 
 ### 播客与流媒体
 
@@ -109,7 +113,9 @@ pi 不支持 MCP，命令直接调用 `dist/cli.js`，所以会话结束时音�
 | `/spotify-search <关键词>` | 搜索 Spotify 目录 |
 | `/spotify-devices` / `/spotify-device <名字>` | 列出 Spotify 设备 / 转移播放 |
 
-Spotify 需要一次性配置（开发者 app + 登录）；三类音源的细节和限制见
+Spotify 需要一次性配置（开发者 app + 登录）；各音源的细节和限制见
 [docs/sources.zh-CN.md](./docs/sources.zh-CN.md)。
 
 直接说话也行："放点爵士"、"换个台"、"停"。
+
+需要手动核验全部内置 stream URL 时，运行 `npm run check:stations`。这个联网检查与普通测试分开，避免临时网络问题影响代码验证。

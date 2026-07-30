@@ -2,8 +2,7 @@
 
 # PirateRadioFM
 
-Play internet radio from a CLI coding agent. 
-the session ends.
+Play internet radio, podcasts, Spotify, and Apple Music from a CLI coding agent.
 
 [中文文档](./README.zh-CN.md)
 
@@ -48,8 +47,7 @@ What it writes:
 - Hermes: MCP server in `~/.hermes/config.yaml`
 - pi: prompt templates in `~/.pi/agent/prompts/`, skill in `~/.pi/agent/skills/radiohead/`
 
-pi does not support MCP, so commands there call `dist/cli.js` directly and
-music does not stop when the session ends. Use `/stop`.
+pi does not support MCP, so its commands call `dist/cli.js` directly.
 
 ## Commands
 
@@ -59,17 +57,22 @@ music does not stop when the session ends. Use `/stop`.
 |---|---|
 | `/jazz` | Jazz |
 | `/classical` | Classical |
-| `/indie` | Indie |
-| `/rock` | Rock |
-| `/country` | Country |
-| `/pop` | Pop |
-| `/ambient` | Ambient |
-| `/lofi` | Lo-fi beats |
-| `/soul` | Soul |
-| `/eighties` | 80s |
-| `/world` | World |
-| `/house` | House |
+| `/indie` | Indie pop / alternative |
+| `/covers` | Cover versions |
+| `/rock` | Classic / album rock |
+| `/metal` | Metal |
+| `/country` | Country / Americana |
+| `/pop` | Pop / electropop |
+| `/ambient` | Ambient / drone / space music |
+| `/chill` | Chill / downtempo (`/lofi` remains as an alias) |
+| `/soul` | Vintage soul |
+| `/lounge` | Lounge / exotica |
+| `/eighties` | 80s synthpop / new wave |
+| `/world` | Celtic and South Asian-influenced world music |
+| `/folk` | Indie / alternative folk |
+| `/house` | Progressive / deep house |
 | `/techno` | Techno / IDM |
+| `/bass` | Dubstep / dub / deep bass |
 
 ### DJ / public stations
 
@@ -81,7 +84,7 @@ music does not stop when the session ends. Use `/stop`.
 | `/nts` | NTS London |
 | `/wwoz` | WWOZ New Orleans, jazz & blues |
 | `/paradise` | Radio Paradise |
-| `/npr` | NPR music stations — The Current, WXPN, KUTX, WFUV (`/next` cycles) |
+| `/public` | US public music radio — The Current, WXPN, KUTX, WFUV (`/next` cycles; `/npr` remains as an alias) |
 | `/hoer` | HÖR Berlin — live DJ stream when on air, latest set otherwise ([setup](./docs/sources.md#hör-berlin)) |
 
 ### Playback control
@@ -98,7 +101,7 @@ music does not stop when the session ends. Use `/stop`.
 | `/now-playing` | Show what's playing |
 | `/doctor` | Diagnose playback problems (player, yt-dlp, Spotify, streams) |
 
-`/nts`, `/paradise`, and `/npr` have several channels; `/next` cycles through them.
+`/nts`, `/paradise`, and `/public` have several channels; `/next` cycles through them.
 
 ### Podcasts & streaming
 
@@ -111,6 +114,8 @@ music does not stop when the session ends. Use `/stop`.
 | `/spotify-devices` / `/spotify-device <name>` | List Spotify devices / move playback |
 
 Spotify needs a one-time setup (developer app + login); details and limits for
-all three sources are in [docs/sources.md](./docs/sources.md).
+all sources are in [docs/sources.md](./docs/sources.md).
 
 Plain language also works: "play some jazz", "switch station", "stop the music".
+
+To audit every bundled stream URL manually, run `npm run check:stations`. This network check is intentionally separate from the normal test suite.

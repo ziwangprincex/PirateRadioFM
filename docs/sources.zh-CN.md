@@ -14,7 +14,7 @@ v0.2.0 在内置电台之外新增了三类音源。本文说明每一类怎么�
 | **Spotify** | 遥控 Spotify 客户端 | Premium + 开发者 app + 登录 | 全平台 |
 | **Apple Music** | 遥控本机 Music.app | 曲目已在资料库里 | 仅 macOS |
 
-`/pause` `/resume` `/next` `/prev` `/volume` `/stop` `/now-playing` 对四类音源
+`/pause` `/resume` `/next` `/prev` `/volume` `/stop` `/now-playing` 对五类音源
 通用，会按当前音源自动分发。切换音源时旧的会自动静音——不会出现两路声音同时播。
 
 ## 播客

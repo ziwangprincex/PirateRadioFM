@@ -1,7 +1,7 @@
 {
   "name": "pirate-radio",
   "version": "0.2.0",
-  "description": "Radio + Spotify + podcasts + Apple Music MCP server for CLI coding agents — built-in genre stations, auto-stops when your session ends.",
+  "description": "Radio, podcasts, Spotify, and Apple Music for CLI coding agents.",
   "type": "module",
   "bin": {
     "pirate-radio": "dist/index.js"
@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "build": "node build.mjs",
     "start": "node dist/index.js",
-    "check": "tsc --noEmit && node build.mjs && node --test dist/selfcheck.js"
+    "check": "tsc --noEmit && node build.mjs && node --test dist/selfcheck.js",
+    "check:stations": "node scripts/check-stations.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0"

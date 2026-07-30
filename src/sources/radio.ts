@@ -3,7 +3,7 @@ import * as player from "../player.js";
 import * as spotify from "./spotify.js";
 import * as applemusic from "./applemusic.js";
 import { now } from "../state.js";
-import { all, genres as allGenres, type Station } from "../stations.js";
+import { all, acceptedGenres, genreInfo, genres as allGenres, resolveGenre, type Station } from "../stations.js";
 
 const stations = all();
 
@@ -13,18 +13,16 @@ export function genres(): string[] {
 
 export function list(): string {
   return genres()
-    .map((g) => `${g} (${stations[g].length} station${stations[g].length > 1 ? "s" : ""})`)
+    .map((g) => {
+      const info = genreInfo(g)!;
+      return `${g} \u2014 ${info.label} (${stations[g].length} station${stations[g].length > 1 ? "s" : ""})`;
+    })
     .join(", ");
 }
 
-function normalize(genre: string): string | null {
-  const g = genre.trim().toLowerCase();
-  return genres().includes(g) ? g : null;
-}
-
 export async function playGenre(genre: string, index = 0): Promise<Station> {
-  const g = normalize(genre);
-  if (!g) throw new Error(`Unknown genre "${genre}". Available: ${genres().join(", ")}`);
+  const g = resolveGenre(genre);
+  if (!g) throw new Error(`Unknown genre "${genre}". Available: ${acceptedGenres().join(", ")}`);
   // If we were on a remote source (Spotify Connect, Music.app), silence it
   // before starting the local stream — otherwise both would play simultaneously
   // (they run in their own apps; our player.stop() only kills local mpv/ffplay).
@@ -55,6 +53,8 @@ export async function next(): Promise<Station> {
 export async function prev(): Promise<Station> {
   if (now.source !== "radio" || !now.genre)
     throw new Error("No radio station is playing.");
-  const len = stations[now.genre].length;
-  return playGenre(now.genre, (now.stationIndex - 1 + len) % len);
+  const genre = resolveGenre(now.genre);
+  if (!genre) throw new Error(`Unknown saved genre "${now.genre}".`);
+  const len = stations[genre].length;
+  return playGenre(genre, (now.stationIndex - 1 + len) % len);
 }
