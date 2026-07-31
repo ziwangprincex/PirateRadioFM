@@ -323,6 +323,11 @@ function clearAnchor() {
   }
 }
 
+// src/dynhosts.ts
+import { readFileSync as readFileSync6, writeFileSync as writeFileSync4, renameSync as renameSync3, mkdirSync as mkdirSync4, existsSync as existsSync3 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { join as join5 } from "node:path";
+
 // src/stations.ts
 import { readFileSync as readFileSync5 } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -399,9 +404,6 @@ function hosts() {
 }
 
 // src/dynhosts.ts
-import { readFileSync as readFileSync6, writeFileSync as writeFileSync4, renameSync as renameSync3, mkdirSync as mkdirSync4, existsSync as existsSync3 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import { join as join5 } from "node:path";
 var dir2 = join5(homedir3(), ".pirate-radio");
 var path = join5(dir2, "dynamic-hosts.json");
 function dynamicHosts() {
@@ -412,6 +414,9 @@ function dynamicHosts() {
   } catch {
     return [];
   }
+}
+function sweepHosts() {
+  return lifecycleTestMode ? dynamicHosts() : [...hosts(), ...dynamicHosts()];
 }
 
 // src/watchdog.ts
@@ -432,8 +437,7 @@ function stopEverything() {
   for (const w of watchdogs) {
     if (w.pid !== process.pid) killPid(w.pid);
   }
-  const matchHosts = lifecycleTestMode ? dynamicHosts() : hosts();
-  for (const pid of findOrphanPlayers(matchHosts)) killPid(pid);
+  for (const pid of findOrphanPlayers(sweepHosts())) killPid(pid);
   clearAnchor();
 }
 var POLL_MS = lifecycleTestMode ? 50 : 3e3;

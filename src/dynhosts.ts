@@ -6,6 +6,8 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { hosts } from "./stations.js";
+import { lifecycleTestMode } from "./lifecycle-mode.js";
 
 const dir = join(homedir(), ".pirate-radio");
 const path = join(dir, "dynamic-hosts.json");
@@ -19,6 +21,22 @@ export function dynamicHosts(): string[] {
   } catch {
     return [];
   }
+}
+
+// The one definition of the orphan-sweep match set. BOTH sweep sites — the
+// stop() path in player.ts and the session-death path in watchdog.ts — must use
+// this, and nothing else: they previously computed the set independently and
+// drifted, leaving watchdog.ts matching only bundled station hosts. That
+// exempted every dynamic-host source (podcast CDNs, HÖR's googlevideo hosts)
+// from the sweep on exactly the path the sweep exists to cover.
+//
+// Read fresh on each call, so hosts registered after a long-lived watchdog
+// spawned are still covered.
+export function sweepHosts(): string[] {
+  // Test bundles stay inside their isolated dynamic-host registry so a sweep in
+  // a temp HOME can never match a real station host — and thus can never kill a
+  // developer's actually-playing music.
+  return lifecycleTestMode ? dynamicHosts() : [...hosts(), ...dynamicHosts()];
 }
 
 // Best-effort: losing a host here only weakens the orphan-sweep safety net for

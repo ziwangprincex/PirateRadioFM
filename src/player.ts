@@ -9,9 +9,7 @@ import { spawn, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { now, readAnchor, anchorAlive } from "./state.js";
-import { hosts } from "./stations.js";
-import { dynamicHosts } from "./dynhosts.js";
-import { lifecycleTestMode } from "./lifecycle-mode.js";
+import { sweepHosts } from "./dynhosts.js";
 import { killPid, findOrphanPlayers } from "./proc.js";
 import {
   addPlayer,
@@ -73,10 +71,10 @@ export function stop(): void {
 // The safety net. Find any mpv/ffplay whose command line references one of our
 // stream hosts and kill it — this is what catches players that the registry
 // lost track of (the original "music keeps playing after terminal close" bug).
-// dynamicHosts() covers podcast episode CDNs, which aren't in stations.json.
+// sweepHosts() owns the match set (bundled station hosts + podcast/HÖR CDNs) and
+// is shared with the watchdog's session-death sweep.
 function sweepOrphans(): void {
-  const matchHosts = lifecycleTestMode ? dynamicHosts() : [...hosts(), ...dynamicHosts()];
-  for (const pid of findOrphanPlayers(matchHosts)) killPid(pid);
+  for (const pid of findOrphanPlayers(sweepHosts())) killPid(pid);
 }
 
 const here = dirname(fileURLToPath(import.meta.url));

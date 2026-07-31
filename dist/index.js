@@ -15884,6 +15884,11 @@ function describe2() {
   return `${now.state === "paused" ? "Paused" : "Playing"}: ${what} (vol ${now.volume})`;
 }
 
+// src/dynhosts.ts
+import { readFileSync as readFileSync6, writeFileSync as writeFileSync4, renameSync as renameSync3, mkdirSync as mkdirSync4, existsSync as existsSync3 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { join as join5 } from "node:path";
+
 // src/stations.ts
 import { readFileSync as readFileSync5 } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -15978,9 +15983,6 @@ function hosts() {
 }
 
 // src/dynhosts.ts
-import { readFileSync as readFileSync6, writeFileSync as writeFileSync4, renameSync as renameSync3, mkdirSync as mkdirSync4, existsSync as existsSync3 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import { join as join5 } from "node:path";
 var dir2 = join5(homedir3(), ".pirate-radio");
 var path = join5(dir2, "dynamic-hosts.json");
 var CAP = 20;
@@ -15992,6 +15994,9 @@ function dynamicHosts() {
   } catch {
     return [];
   }
+}
+function sweepHosts() {
+  return lifecycleTestMode ? dynamicHosts() : [...hosts(), ...dynamicHosts()];
 }
 function rememberHost(host) {
   const h = host.toLowerCase();
@@ -16037,8 +16042,7 @@ function stop() {
   sweepOrphans();
 }
 function sweepOrphans() {
-  const matchHosts = lifecycleTestMode ? dynamicHosts() : [...hosts(), ...dynamicHosts()];
-  for (const pid of findOrphanPlayers(matchHosts)) killPid(pid);
+  for (const pid of findOrphanPlayers(sweepHosts())) killPid(pid);
 }
 var here2 = dirname3(fileURLToPath2(import.meta.url));
 function play(url, volume) {

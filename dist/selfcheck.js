@@ -371,6 +371,11 @@ function describe() {
   return `${now.state === "paused" ? "Paused" : "Playing"}: ${what} (vol ${now.volume})`;
 }
 
+// src/dynhosts.ts
+import { readFileSync as readFileSync6, writeFileSync as writeFileSync4, renameSync as renameSync3, mkdirSync as mkdirSync4, existsSync as existsSync3 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { join as join5 } from "node:path";
+
 // src/stations.ts
 import { readFileSync as readFileSync5 } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -468,9 +473,6 @@ function hosts() {
 }
 
 // src/dynhosts.ts
-import { readFileSync as readFileSync6, writeFileSync as writeFileSync4, renameSync as renameSync3, mkdirSync as mkdirSync4, existsSync as existsSync3 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import { join as join5 } from "node:path";
 var dir2 = join5(homedir3(), ".pirate-radio");
 var path = join5(dir2, "dynamic-hosts.json");
 var CAP = 20;
@@ -482,6 +484,9 @@ function dynamicHosts() {
   } catch {
     return [];
   }
+}
+function sweepHosts() {
+  return lifecycleTestMode ? dynamicHosts() : [...hosts(), ...dynamicHosts()];
 }
 function rememberHost(host) {
   const h = host.toLowerCase();
@@ -527,8 +532,7 @@ function stop() {
   sweepOrphans();
 }
 function sweepOrphans() {
-  const matchHosts = lifecycleTestMode ? dynamicHosts() : [...hosts(), ...dynamicHosts()];
-  for (const pid of findOrphanPlayers(matchHosts)) killPid(pid);
+  for (const pid of findOrphanPlayers(sweepHosts())) killPid(pid);
 }
 var here2 = dirname3(fileURLToPath2(import.meta.url));
 function play(url, volume) {
@@ -1591,6 +1595,16 @@ test("hosts() is non-empty and unique", () => {
   const h = hosts();
   assert.ok(h.length > 0, "hosts() returned empty \u2014 stations.json broken?");
   assert.strictEqual(new Set(h).size, h.length, "hosts() has duplicates");
+});
+test("both orphan-sweep sites share one host set", () => {
+  const src = join9(dirname4(fileURLToPath3(import.meta.url)), "..", "src");
+  for (const file of ["player.ts", "watchdog.ts"]) {
+    const body = readFileSync8(join9(src, file), "utf8");
+    const sweepCall = /findOrphanPlayers\(\s*sweepHosts\(\)\s*\)/.test(body);
+    assert.ok(sweepCall, `${file}: must sweep with sweepHosts(), not a locally built list`);
+    assert.ok(!/\bdynamicHosts\(\)/.test(body), `${file}: must not compose its own sweep set`);
+  }
+  assert.ok(sweepHosts().length >= hosts().length, "sweepHosts() dropped bundled station hosts");
 });
 test("player detect returns a known value", () => {
   const p = playerAvailable();

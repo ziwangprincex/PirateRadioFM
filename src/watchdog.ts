@@ -17,8 +17,7 @@
 // Invoked as: node dist/watchdog.js <anchorPid> <anchorToken> <playerPid>
 import { clearAnchor, readAnchor, type Anchor } from "./state.js";
 import { pidAlive, sameProcess, killPid, findOrphanPlayers } from "./proc.js";
-import { hosts } from "./stations.js";
-import { dynamicHosts } from "./dynhosts.js";
+import { sweepHosts } from "./dynhosts.js";
 import { lifecycleTestMode } from "./lifecycle-mode.js";
 import { drainAll, livePlayers } from "./registry.js";
 
@@ -48,10 +47,10 @@ function stopEverything(): void {
     if (w.pid !== process.pid) killPid(w.pid); // don't kill ourselves early
   }
   // Safety net: anything pointed at our hosts that escaped the registry.
-  // Dedicated test bundles use only their isolated dynamic-host registry, never
-  // the real bundled station hosts.
-  const matchHosts = lifecycleTestMode ? dynamicHosts() : hosts();
-  for (const pid of findOrphanPlayers(matchHosts)) killPid(pid);
+  // sweepHosts() is shared with player.stop() so the two sweep sites can't drift
+  // apart again (they did: this one used to omit the dynamic hosts, exempting
+  // podcast/HÖR players from the session-death sweep).
+  for (const pid of findOrphanPlayers(sweepHosts())) killPid(pid);
   clearAnchor();
 }
 

@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import * as radio from "./sources/radio.js";
 import * as player from "./player.js";
 import { acceptedGenres, catalogVersion, hosts, resolveGenre } from "./stations.js";
+import { sweepHosts } from "./dynhosts.js";
 import { parseArgs } from "./argparse.js";
 import { tools } from "./tools.js";
 import { parseFeed, embeddedDirectUrl } from "./sources/podcast.js";
@@ -38,6 +39,25 @@ test("hosts() is non-empty and unique", () => {
   const h = hosts();
   assert.ok(h.length > 0, "hosts() returned empty — stations.json broken?");
   assert.strictEqual(new Set(h).size, h.length, "hosts() has duplicates");
+});
+
+test("both orphan-sweep sites share one host set", () => {
+  // Regression guard. player.stop() and the watchdog's session-death sweep once
+  // computed the match set independently and drifted: the watchdog used only
+  // hosts(), omitting dynamicHosts(), which exempted podcast/HÖR players from
+  // the sweep on the session-death path — the path the sweep matters most on.
+  // The lifecycle integration tests structurally CANNOT catch this (in test-mode
+  // bundles both branches collapse to dynamicHosts()), so assert on the source:
+  // neither sweep site may build its own set.
+  const src = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
+  for (const file of ["player.ts", "watchdog.ts"]) {
+    const body = readFileSync(join(src, file), "utf8");
+    const sweepCall = /findOrphanPlayers\(\s*sweepHosts\(\)\s*\)/.test(body);
+    assert.ok(sweepCall, `${file}: must sweep with sweepHosts(), not a locally built list`);
+    assert.ok(!/\bdynamicHosts\(\)/.test(body), `${file}: must not compose its own sweep set`);
+  }
+  // And the shared set really does include the dynamic hosts in production.
+  assert.ok(sweepHosts().length >= hosts().length, "sweepHosts() dropped bundled station hosts");
 });
 
 test("player detect returns a known value", () => {
