@@ -12,6 +12,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { playerAvailable } from "./player.js";
 import { readAnchor, anchorAlive } from "./state.js";
+import { findPiProcess } from "./proc.js";
 import { livePlayerCountUnlocked } from "./registry.js";
 import { all, hosts } from "./stations.js";
 
@@ -66,7 +67,14 @@ function checkSpotify(): Check {
 
 function checkSession(): Check {
   const anchor = readAnchor();
-  if (!anchor) return { level: "warn", label: "Session anchor", detail: "none — music started now won't auto-stop on session end" };
+  if (!anchor) {
+    // No MCP server (the pi skill path). The watchdog falls back to the pi
+    // process that invoked the CLI — report that so the warning isn't a lie.
+    const host = findPiProcess();
+    return host
+      ? { level: "ok", label: "Session anchor", detail: `none (raw CLI) — bound to pi (pid ${host.pid}); music stops when pi exits` }
+      : { level: "warn", label: "Session anchor", detail: "none — music started now won't auto-stop on session end (run radio_stop)" };
+  }
   return anchorAlive(anchor)
     ? { level: "ok", label: "Session anchor", detail: `live (pid ${anchor.pid})` }
     : { level: "warn", label: "Session anchor", detail: `stale (pid ${anchor.pid} gone) — will be cleared on next server start` };

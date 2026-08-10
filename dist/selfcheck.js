@@ -155,6 +155,68 @@ function parseUnixPs(out, matches) {
   }
   return pids;
 }
+function isPiProcess(name, args) {
+  return name === "pi" || name === "pi.exe" || args.includes("pi-coding-agent") || /(^|\s|\/)pi(\s|$)/.test(args);
+}
+function enumerateProcesses() {
+  const map = /* @__PURE__ */ new Map();
+  if (isWin) {
+    const out2 = execFileSync(
+      "powershell",
+      [
+        "-NoProfile",
+        "-Command",
+        "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress"
+      ],
+      { encoding: "utf8", timeout: 8e3, windowsHide: true }
+    );
+    const rows = JSON.parse(out2.trim() || "[]");
+    for (const r of Array.isArray(rows) ? rows : [rows]) {
+      if (!r.ProcessId) continue;
+      map.set(r.ProcessId, {
+        pid: r.ProcessId,
+        ppid: r.ParentProcessId ?? 0,
+        name: r.Name ?? "",
+        args: r.CommandLine ?? ""
+      });
+    }
+    return map;
+  }
+  const out = execFileSync("ps", ["-eo", "pid=,ppid=,comm=,args="], {
+    encoding: "utf8",
+    timeout: 8e3
+  });
+  for (const line of out.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    const parts = t.split(/\s+/);
+    const pid = Number(parts[0]);
+    if (!Number.isInteger(pid) || pid <= 0) continue;
+    map.set(pid, {
+      pid,
+      ppid: Number(parts[1]) || 0,
+      name: parts[2] ?? "",
+      args: parts.slice(3).join(" ")
+    });
+  }
+  return map;
+}
+function findPiProcess() {
+  try {
+    const procs = enumerateProcesses();
+    const seen = /* @__PURE__ */ new Set();
+    let pid = process.ppid;
+    for (let depth = 0; depth < 32 && pid > 1 && !seen.has(pid); depth++) {
+      seen.add(pid);
+      const p = procs.get(pid);
+      if (!p) break;
+      if (isPiProcess(p.name, p.args)) return { pid, token: procStartToken(pid) };
+      pid = p.ppid;
+    }
+  } catch {
+  }
+  return null;
+}
 
 // src/registry.ts
 import {
@@ -557,14 +619,22 @@ function play(url, volume) {
 }
 function spawnWatchdog(playerPid) {
   const anchor = readAnchor();
-  if (!anchor || !anchorAlive(anchor)) return;
+  if (anchor && anchorAlive(anchor)) {
+    spawnWatchdogProc("file", anchor.pid, anchor.token, playerPid);
+    return;
+  }
+  const host = findPiProcess();
+  if (host) spawnWatchdogProc("pid", host.pid, host.token, playerPid);
+}
+function spawnWatchdogProc(kind, anchorPid, anchorToken, playerPid) {
   const wd = spawn(
     process.execPath,
     [
       join6(here2, "watchdog.js"),
-      String(anchor.pid),
-      anchor.token ?? "",
-      String(playerPid)
+      String(anchorPid),
+      anchorToken ?? "",
+      String(playerPid),
+      kind
     ],
     { stdio: "ignore", detached: true, windowsHide: true }
   );
@@ -1256,7 +1326,10 @@ function checkSpotify() {
 }
 function checkSession() {
   const anchor = readAnchor();
-  if (!anchor) return { level: "warn", label: "Session anchor", detail: "none \u2014 music started now won't auto-stop on session end" };
+  if (!anchor) {
+    const host = findPiProcess();
+    return host ? { level: "ok", label: "Session anchor", detail: `none (raw CLI) \u2014 bound to pi (pid ${host.pid}); music stops when pi exits` } : { level: "warn", label: "Session anchor", detail: "none \u2014 music started now won't auto-stop on session end (run radio_stop)" };
+  }
   return anchorAlive(anchor) ? { level: "ok", label: "Session anchor", detail: `live (pid ${anchor.pid})` } : { level: "warn", label: "Session anchor", detail: `stale (pid ${anchor.pid} gone) \u2014 will be cleared on next server start` };
 }
 function checkPlayers() {

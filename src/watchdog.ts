@@ -14,7 +14,20 @@
 //      we kill EVERY registered player/watchdog and then orphan-sweep by host,
 //      so nothing our tool started can survive the session.
 //
-// Invoked as: node dist/watchdog.js <anchorPid> <anchorToken> <playerPid>
+// Invoked as: node dist/watchdog.js <anchorPid> <anchorToken> <playerPid> [kind]
+//
+// kind "file" (default): the anchor comes from the MCP server's anchor.json.
+//   On session death the watchdog drains the whole registry, sweeps orphans by
+//   host, and clears the anchor file — this session owns all of it.
+//
+// kind "pid": no anchor file at all (the pi skill path — pi runs no MCP
+//   server). The anchor is the pi process that spawned the CLI, and this
+//   watchdog's whole job is "stop the one player I was born for when pi dies".
+//   It must NOT touch anchor.json (a concurrent MCP session may own it) and
+//   must NOT drain the registry or sweep orphans (the registry is global —
+//   another pi session's player may live in it). If the guarded player is
+//   already gone, a newer play() took over; exit quietly and let that session's
+//   watchdog manage things.
 import { clearAnchor, readAnchor, type Anchor } from "./state.js";
 import { pidAlive, sameProcess, killPid, findOrphanPlayers } from "./proc.js";
 import { sweepHosts } from "./dynhosts.js";
@@ -24,6 +37,7 @@ import { drainAll, livePlayers } from "./registry.js";
 const anchorPid = Number(process.argv[2]);
 const anchorToken = process.argv[3] ? process.argv[3] : null; // "" → null
 const playerPid = Number(process.argv[4]);
+const kind = process.argv[5] === "pid" ? "pid" : "file";
 
 if (!Number.isInteger(anchorPid) || !Number.isInteger(playerPid)) {
   process.exit(1);
@@ -80,6 +94,13 @@ const timer = setInterval(() => {
     !cheapDead && tick % TOKEN_EVERY === 0 && !sameProcess(anchor.pid, anchor.token);
 
   if (cheapDead || reuseDead) {
+    clearInterval(timer);
+    if (kind === "pid") {
+      // Guard only OUR player (see header comment). If it's already gone, a
+      // newer play() replaced it — leave that session's music alone.
+      if (pidAlive(playerPid)) killPid(playerPid);
+      process.exit(0);
+    }
     // A concurrent session may have taken over the anchor file. If so, exit
     // quietly and let its own watchdog manage things — do not drain its state.
     if (!stillOurAnchor()) {

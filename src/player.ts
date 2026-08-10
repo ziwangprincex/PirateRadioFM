@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { now, readAnchor, anchorAlive } from "./state.js";
 import { sweepHosts } from "./dynhosts.js";
-import { killPid, findOrphanPlayers } from "./proc.js";
+import { killPid, findOrphanPlayers, findPiProcess } from "./proc.js";
 import {
   addPlayer,
   addWatchdog,
@@ -109,23 +109,40 @@ export function play(url: string, volume: number): void {
   }
 }
 
-// Launch the detached watchdog that stops the player when the session anchor
-// dies. No anchor (e.g. music started from a raw CLI call with no MCP server
-// running) → skip it; there's no session to bind to.
+// Launch the detached watchdog that stops the player when the session dies.
+//
+// Two anchor kinds, same watchdog script, different guarding semantics:
+//   - "file": an MCP server is running and wrote anchor.json (Claude Code,
+//     Codex, …). The watchdog polls that file's pid and on death drains the
+//     whole registry, sweeps orphans, and clears the anchor.
+//   - "pid": no MCP server (the pi skill path — pi runs no MCP server, so
+//     anchor.json never exists here). The watchdog polls the pi process that
+//     ran this CLI instead: when pi exits (agent quit, terminal closed) the
+//     music stops. It kills only the one player it was spawned for.
+// No anchor at all → skip; there's no session to bind to.
 function spawnWatchdog(playerPid: number): void {
   const anchor = readAnchor();
-  // Skip if there is no anchor at all (raw CLI, no MCP session) OR if the anchor
-  // belongs to a dead session (MCP crashed but anchor.json wasn't cleaned up).
-  // Otherwise the watchdog would poll a dead pid, immediately conclude "session
-  // dead", and kill the music we just started — self-suicide within seconds.
-  if (!anchor || !anchorAlive(anchor)) return;
+  // Skip a dead anchor: if the anchor belongs to a dead session (MCP crashed
+  // but anchor.json wasn't cleaned up), the watchdog would poll a dead pid,
+  // immediately conclude "session dead", and kill the music we just started —
+  // self-suicide within seconds.
+  if (anchor && anchorAlive(anchor)) {
+    spawnWatchdogProc("file", anchor.pid, anchor.token, playerPid);
+    return;
+  }
+  const host = findPiProcess();
+  if (host) spawnWatchdogProc("pid", host.pid, host.token, playerPid);
+}
+
+function spawnWatchdogProc(kind: "file" | "pid", anchorPid: number, anchorToken: string | null, playerPid: number): void {
   const wd = spawn(
     process.execPath,
     [
       join(here, "watchdog.js"),
-      String(anchor.pid),
-      anchor.token ?? "",
+      String(anchorPid),
+      anchorToken ?? "",
       String(playerPid),
+      kind,
     ],
     { stdio: "ignore", detached: true, windowsHide: true }
   );

@@ -277,4 +277,64 @@ if (!(await childMain())) {
       removeHome(home);
     }
   });
+
+  test("pid-mode watchdog stops its player when the host process dies", { concurrency: false }, async () => {
+    const home = makeHome();
+    const player = sleeper();
+    const host = sleeper(); // stands in for the pi process
+    try {
+      assert.ok(player.pid && host.pid);
+      const dir = stateDir(home);
+      mkdirSync(dir, { recursive: true });
+      // pid mode must never touch anchor.json — a concurrent MCP session may
+      // own it, so write a foreign one and require it to survive.
+      writeFileSync(join(dir, "anchor.json"), JSON.stringify({ pid: 999_999_996, token: "not-ours" }));
+      const watchdog = spawn(process.execPath, [join(dirname(self), "watchdog.js"), String(host.pid), "", String(player.pid), "pid"], {
+        env: isolatedEnv(home, {}),
+        stdio: ["ignore", "ignore", "pipe"], windowsHide: true,
+      });
+      // Host alive → the player must survive several poll cycles.
+      await sleep(400);
+      assert.ok(alive(player.pid), "player must keep playing while the host lives");
+      stopChild(host); // the "pi" process exits
+      const result = await exitResult(watchdog, 6000);
+      assert.strictEqual(result.code, 0, result.stderr);
+      await waitFor(() => !alive(player.pid), 3000);
+      const anchor = JSON.parse(readFileSync(join(dir, "anchor.json"), "utf8"));
+      assert.strictEqual(anchor.pid, 999_999_996, "pid-mode watchdog must not clear anchor.json");
+    } finally {
+      await stopAndWait(player);
+      await stopAndWait(host);
+      removeHome(home);
+    }
+  });
+
+  test("pid-mode watchdog leaves another session's player alone", { concurrency: false }, async () => {
+    const home = makeHome();
+    const other = sleeper(); // a player owned by a different pi session
+    const host = sleeper();
+    const mine = sleeper();
+    try {
+      assert.ok(other.pid && host.pid && mine.pid);
+      const dir = stateDir(home);
+      mkdirSync(dir, { recursive: true });
+      const added = runChild(home, ["registry-add", String(other.pid), "player"], {});
+      assert.strictEqual(added.status, 0, added.stderr);
+      const watchdog = spawn(process.execPath, [join(dirname(self), "watchdog.js"), String(host.pid), "", String(mine.pid), "pid"], {
+        env: isolatedEnv(home, {}),
+        stdio: ["ignore", "ignore", "pipe"], windowsHide: true,
+      });
+      await sleep(300);
+      stopChild(host);
+      const result = await exitResult(watchdog, 6000);
+      assert.strictEqual(result.code, 0, result.stderr);
+      await waitFor(() => !alive(mine.pid), 3000);
+      assert.ok(alive(other.pid), "pid-mode watchdog must not kill players it doesn't own");
+    } finally {
+      await stopAndWait(other);
+      await stopAndWait(host);
+      await stopAndWait(mine);
+      removeHome(home);
+    }
+  });
 }

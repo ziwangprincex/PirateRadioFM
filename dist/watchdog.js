@@ -423,6 +423,7 @@ function sweepHosts() {
 var anchorPid = Number(process.argv[2]);
 var anchorToken = process.argv[3] ? process.argv[3] : null;
 var playerPid = Number(process.argv[4]);
+var kind = process.argv[5] === "pid" ? "pid" : "file";
 if (!Number.isInteger(anchorPid) || !Number.isInteger(playerPid)) {
   process.exit(1);
 }
@@ -452,6 +453,11 @@ var timer = setInterval(() => {
   const cheapDead = !pidAlive(anchor.pid);
   const reuseDead = !cheapDead && tick % TOKEN_EVERY === 0 && !sameProcess(anchor.pid, anchor.token);
   if (cheapDead || reuseDead) {
+    clearInterval(timer);
+    if (kind === "pid") {
+      if (pidAlive(playerPid)) killPid(playerPid);
+      process.exit(0);
+    }
     if (!stillOurAnchor()) {
       clearInterval(timer);
       process.exit(0);

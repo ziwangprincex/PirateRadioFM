@@ -188,3 +188,97 @@ function parseUnixPs(out: string, matches: (cmd: string) => boolean): number[] {
   }
   return pids;
 }
+
+// --- host-process discovery (pi fallback anchor) ---------------------------
+// When music is started by a raw CLI invocation with no MCP server running (the
+// pi skill path), anchor.json never exists and player.spawnWatchdog() would
+// skip the watchdog entirely — music would then survive a terminal close
+// forever. Fall back to the invoking host instead: walk this process's ancestor
+// chain and find the pi agent process. When pi dies (agent exited, terminal
+// closed, hard kill) the watchdog sees the anchor die and stops the music.
+export interface HostProcess { pid: number; token: string | null; }
+
+interface ProcInfo { pid: number; ppid: number; name: string; args: string; }
+
+function isPiProcess(name: string, args: string): boolean {
+  // npm bin "pi" → the running process is the compiled cli; on macOS ps shows
+  // comm="pi", args="pi". A node-script install shows the interpreter plus a
+  // commandline containing the pi-coding-agent package path. Match all three.
+  return (
+    name === "pi" ||
+    name === "pi.exe" ||
+    args.includes("pi-coding-agent") ||
+    /(^|\s|\/)pi(\s|$)/.test(args)
+  );
+}
+
+// One-shot snapshot of every process on the host: pid → {ppid, name, args}.
+// Two lines for args containing spaces, so split into exactly the leading
+// pid/ppid/comm columns and rejoin the rest.
+function enumerateProcesses(): Map<number, ProcInfo> {
+  const map = new Map<number, ProcInfo>();
+  if (isWin) {
+    // One PowerShell call, JSON out. CommandLine is null for kernel processes.
+    const out = execFileSync(
+      "powershell",
+      [
+        "-NoProfile",
+        "-Command",
+        "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | " +
+          "Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress",
+      ],
+      { encoding: "utf8", timeout: 8000, windowsHide: true }
+    );
+    const rows: Array<{ ProcessId?: number; ParentProcessId?: number; Name?: string; CommandLine?: string | null }> =
+      JSON.parse(out.trim() || "[]");
+    for (const r of Array.isArray(rows) ? rows : [rows]) {
+      if (!r.ProcessId) continue;
+      map.set(r.ProcessId, {
+        pid: r.ProcessId,
+        ppid: r.ParentProcessId ?? 0,
+        name: r.Name ?? "",
+        args: r.CommandLine ?? "",
+      });
+    }
+    return map;
+  }
+  const out = execFileSync("ps", ["-eo", "pid=,ppid=,comm=,args="], {
+    encoding: "utf8",
+    timeout: 8000,
+  });
+  for (const line of out.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    const parts = t.split(/\s+/);
+    const pid = Number(parts[0]);
+    if (!Number.isInteger(pid) || pid <= 0) continue;
+    map.set(pid, {
+      pid,
+      ppid: Number(parts[1]) || 0,
+      name: parts[2] ?? "",
+      args: parts.slice(3).join(" "),
+    });
+  }
+  return map;
+}
+
+// Find the pi agent process that (indirectly) ran this CLI, or null when there
+// is none in the ancestor chain (e.g. the CLI was run from a plain terminal —
+// no session to bind to, music keeps playing until explicitly stopped).
+export function findPiProcess(): HostProcess | null {
+  try {
+    const procs = enumerateProcesses();
+    const seen = new Set<number>();
+    let pid = process.ppid;
+    for (let depth = 0; depth < 32 && pid > 1 && !seen.has(pid); depth++) {
+      seen.add(pid);
+      const p = procs.get(pid);
+      if (!p) break; // chain broken (ps raced a process exit) — give up
+      if (isPiProcess(p.name, p.args)) return { pid, token: procStartToken(pid) };
+      pid = p.ppid;
+    }
+  } catch {
+    /* enumeration failed — no fallback anchor */
+  }
+  return null;
+}
