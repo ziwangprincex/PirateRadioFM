@@ -57,7 +57,7 @@ function procStartToken(pid) {
           "-Command",
           `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" -ErrorAction SilentlyContinue).CreationDate`
         ],
-        { encoding: "utf8", timeout: 8e3, windowsHide: true }
+        { encoding: "utf8", timeout: 15e3, windowsHide: true }
       ).trim();
       return out ? `w:${out}` : null;
     }
