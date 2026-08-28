@@ -34,13 +34,15 @@ interface Registry {
 }
 
 const dir = join(homedir(), ".pirate-radio");
-const registryPath = join(dir, "players.json");
+const regPath = join(dir, "players.json");
 const lockPath = join(dir, "players.lock");
 
+export function registryPath(): string { return regPath; }
+
 function readRaw(): Registry {
-  if (!existsSync(registryPath)) return { players: [], watchdogs: [] };
+  if (!existsSync(regPath)) return { players: [], watchdogs: [] };
   try {
-    const r = JSON.parse(readFileSync(registryPath, "utf8")) as Partial<Registry>;
+    const r = JSON.parse(readFileSync(regPath, "utf8")) as Partial<Registry>;
     return { players: r.players ?? [], watchdogs: r.watchdogs ?? [] };
   } catch {
     return { players: [], watchdogs: [] };
@@ -53,9 +55,9 @@ function writeRaw(r: Registry): void {
   // win32/macOS/Linux, so a process killed mid-write (the whole point of this
   // tool — terminals get hard-killed) can never leave a truncated registry that
   // readRaw would parse as "no players" and orphan the stream.
-  const tmp = `${registryPath}.${process.pid}.tmp`;
+  const tmp = `${regPath}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(r, null, 2));
-  renameSync(tmp, registryPath);
+  renameSync(tmp, regPath);
 }
 
 // --- cross-process lock ----------------------------------------------------

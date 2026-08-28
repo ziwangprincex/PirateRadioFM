@@ -49,10 +49,17 @@ export function procStartToken(pid: number): string | null {
     }
     if (isMac) {
       // No /proc on macOS. lstart is an absolute wall-clock start time.
+      // LC_ALL=C pins the format: lstart is rendered through LC_TIME, so a GUI-
+      // launched process (system region, e.g. zh_CN) and a shell-launched one
+      // (LANG=en_US) would render the SAME process's start time differently.
+      // The anchor token is written by one process and compared by another, so
+      // a locale mismatch reads as "different process" — the watchdog would then
+      // declare a live session dead and kill the music mid-song.
       const out = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
         encoding: "utf8",
         timeout: 4000,
         windowsHide: true,
+        env: { ...process.env, LC_ALL: "C" },
       }).trim();
       return out ? `d:${out}` : null;
     }
@@ -201,20 +208,33 @@ export interface HostProcess { pid: number; token: string | null; }
 interface ProcInfo { pid: number; ppid: number; name: string; args: string; }
 
 function isPiProcess(name: string, args: string): boolean {
-  // npm bin "pi" → the running process is the compiled cli; on macOS ps shows
-  // comm="pi", args="pi". A node-script install shows the interpreter plus a
-  // commandline containing the pi-coding-agent package path. Match all three.
-  return (
-    name === "pi" ||
-    name === "pi.exe" ||
-    args.includes("pi-coding-agent") ||
-    /(^|\s|\/)pi(\s|$)/.test(args)
-  );
+  // `name` is argv[0]'s basename (see enumerateProcesses), so the npm-bin case
+  // — a compiled `pi` binary, however deep its install path — is an exact match
+  // on either platform. A node-script install instead shows the interpreter as
+  // argv[0] with the script as argv[1], so check that too.
+  //
+  // Deliberately narrow: an earlier version accepted a bare "pi" token ANYWHERE
+  // in the command line, which any unrelated ancestor could satisfy (a shell
+  // running a script that merely mentions pi — this fired on a plain `zsh -c`
+  // wrapper in testing). A false positive is not benign: findPiProcess() hands
+  // that pid to the watchdog as the session anchor, binding the music's
+  // lifetime to the wrong process.
+  if (name === "pi" || name === "pi.exe") return true;
+  if (args.includes("pi-coding-agent")) return true;
+  const argv1 = args.split(" ")[1] ?? "";
+  const base = argv1.slice(argv1.lastIndexOf("/") + 1);
+  return base === "pi" || base === "pi.js";
 }
 
 // One-shot snapshot of every process on the host: pid → {ppid, name, args}.
-// Two lines for args containing spaces, so split into exactly the leading
-// pid/ppid/comm columns and rejoin the rest.
+//
+// On unix we deliberately do NOT ask ps for `comm=`. macOS renders comm as the
+// truncated-to-16-chars FULL PATH ("/usr/libexec/dpr"), not a basename, and it
+// can itself contain spaces ("Core Audio Drive") — so a naive whitespace split
+// misaligns the comm column AND shifts a stray token into args. Instead take
+// only pid/ppid (always numeric, always first) and treat the entire remainder
+// as args, then derive `name` from argv[0]'s basename ourselves. That is the
+// same technique parseUnixPs() already uses.
 function enumerateProcesses(): Map<number, ProcInfo> {
   const map = new Map<number, ProcInfo>();
   if (isWin) {
@@ -242,21 +262,27 @@ function enumerateProcesses(): Map<number, ProcInfo> {
     }
     return map;
   }
-  const out = execFileSync("ps", ["-eo", "pid=,ppid=,comm=,args="], {
+  const out = execFileSync("ps", ["-eo", "pid=,ppid=,args="], {
     encoding: "utf8",
     timeout: 8000,
   });
   for (const line of out.split("\n")) {
     const t = line.trim();
     if (!t) continue;
-    const parts = t.split(/\s+/);
-    const pid = Number(parts[0]);
+    // Split off exactly two leading numeric columns; everything after is argv,
+    // preserved verbatim (no whitespace collapsing).
+    const m = t.match(/^(\d+)\s+(\d+)\s+([\s\S]*)$/);
+    if (!m) continue;
+    const pid = Number(m[1]);
     if (!Number.isInteger(pid) || pid <= 0) continue;
+    const args = m[3];
+    // argv[0]'s basename. Kernel threads show as "[kthread]" and have no path.
+    const argv0 = args.split(" ")[0] ?? "";
     map.set(pid, {
       pid,
-      ppid: Number(parts[1]) || 0,
-      name: parts[2] ?? "",
-      args: parts.slice(3).join(" "),
+      ppid: Number(m[2]) || 0,
+      name: argv0.slice(argv0.lastIndexOf("/") + 1),
+      args,
     });
   }
   return map;

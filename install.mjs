@@ -31,6 +31,12 @@ const root = dirname(fileURLToPath(import.meta.url));
 const toPosix = (p) => p.replace(/\\/g, "/");
 const serverJs = toPosix(join(root, "dist", "index.js"));
 const cliJs = toPosix(join(root, "dist", "cli.js"));
+// Absolute interpreter path, not a bare "node". An agent launched from
+// Finder/Dock inherits the default PATH (/usr/bin:/bin:...), which does not
+// include nvm, homebrew, fnm or volta — so a bare "node" fails with ENOENT and
+// the MCP server silently never starts, with nothing to explain why. We already
+// write absolute paths for serverJs/cliJs; the interpreter deserves the same.
+const nodeBin = toPosix(process.execPath);
 const home = homedir();
 
 // --- source of truth: parse commands/*.md ----------------------------------
@@ -70,7 +76,7 @@ try {
 
 // Rebuild the concrete CLI invocation with an absolute path for hosts that run
 // it via their own shell-injection or bash tool.
-const cliCall = (c) => `node "${cliJs}" ${c.tool}${c.args ? " " + c.args : ""}`;
+const cliCall = (c) => `"${nodeBin}" "${cliJs}" ${c.tool}${c.args ? " " + c.args : ""}`;
 
 // Natural-language phrasing of a command for prompt-style hosts (codex, pi)
 // where the file body is a prompt to the model, not an executed template.
@@ -112,7 +118,7 @@ function installCodex(un) {
     return;
   }
   if (!toml.includes(header)) {
-    const block = `${toml.endsWith("\n") || toml === "" ? "" : "\n"}\n${header}\ncommand = "node"\nargs = ["${serverJs}"]\n`;
+    const block = `${toml.endsWith("\n") || toml === "" ? "" : "\n"}\n${header}\ncommand = "${nodeBin}"\nargs = ["${serverJs}"]\n`;
     mkdirSync(codexDir, { recursive: true });
     writeFileSync(cfg, toml + block);
     report("edit ", cfg);
@@ -134,7 +140,7 @@ function installOpencode(un) {
     try { json = JSON.parse(readFileSync(cfg, "utf8")); }
     catch {
       process.stdout.write(`  skip  ${cfg} is not valid JSON — add this yourself:\n` +
-        `        "mcp": { "radiohead": { "type": "local", "command": ["node", "${serverJs}"], "enabled": true } }\n`);
+        `        "mcp": { "radiohead": { "type": "local", "command": ["${nodeBin}", "${serverJs}"], "enabled": true } }\n`);
       json = null;
     }
   }
@@ -150,7 +156,7 @@ function installOpencode(un) {
   }
   if (json) {
     json.$schema ??= "https://opencode.ai/config.json";
-    json.mcp = { ...json.mcp, radiohead: { type: "local", command: ["node", serverJs], enabled: true } };
+    json.mcp = { ...json.mcp, radiohead: { type: "local", command: [nodeBin, serverJs], enabled: true } };
     mkdirSync(opencodeDir, { recursive: true });
     writeFileSync(cfg, JSON.stringify(json, null, 2) + "\n");
     report("edit ", cfg);
@@ -167,7 +173,7 @@ function installOpencode(un) {
 const hermesDir = join(home, ".hermes");
 function installHermes(un) {
   const cfg = join(hermesDir, "config.yaml");
-  const ours = `  radiohead:\n    command: "node"\n    args: ["${serverJs}"]\n`;
+  const ours = `  radiohead:\n    command: "${nodeBin}"\n    args: ["${serverJs}"]\n`;
   let yaml = existsSync(cfg) ? readFileSync(cfg, "utf8") : "";
   if (un) {
     const next = yaml.replace(ours, "");
@@ -217,7 +223,7 @@ description: Play internet radio (jazz, lofi, techno, KEXP, NTS…) and control 
 Every action is one CLI call (no server needed):
 
 \`\`\`
-node "${cliJs}" <tool> [key=value ...]
+"${nodeBin}" "${cliJs}" <tool> [key=value ...]
 \`\`\`
 
 | Tool | Does |

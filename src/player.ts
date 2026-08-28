@@ -79,7 +79,10 @@ function sweepOrphans(): void {
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-// volume is 0-100. mpv takes --volume=0..100; ffplay takes -volume 0..256.
+// volume is 0-100. Both players take 0..100: mpv as --volume, ffplay as
+// -volume. ffplay used to be 0..256 (SDL_MIX_MAXVOLUME) but has been 0..100
+// since FFmpeg 4; scaling to 256 made it clamp everything >=40 to full blast,
+// so /volume was a silent no-op above 39 on ffplay-only machines.
 export function play(url: string, volume: number): void {
   const player = detect();
   if (!player) throw new Error(installHint());
@@ -87,7 +90,7 @@ export function play(url: string, volume: number): void {
   const args =
     player === "mpv"
       ? ["--no-video", "--really-quiet", `--volume=${volume}`, url]
-      : ["-nodisp", "-autoexit", "-loglevel", "quiet", "-volume", String(Math.round((volume / 100) * 256)), url];
+      : ["-nodisp", "-autoexit", "-loglevel", "quiet", "-volume", String(volume), url];
   // detached + unref lets the child outlive this short-lived CLI process.
   const child = spawn(player, args, { stdio: "ignore", detached: true, windowsHide: true });
   child.unref();

@@ -76,25 +76,46 @@ export async function play(target: string): Promise<string> {
 export function pauseIfRunning(): void {
   if (process.platform !== "darwin") return;
   try {
-    osa(`if application "Music" is running then tell application "Music" to pause`);
+    osa(ifRunning("pause"));
   } catch {
     /* best effort */
   }
 }
 
-export function pause(): void { assertMac(); osa(`tell application "Music" to pause`); }
-export function resume(): void { assertMac(); osa(`tell application "Music" to play`); }
-export function stop(): void { assertMac(); osa(`tell application "Music" to stop`); }
-export function next(): void { assertMac(); osa(`tell application "Music" to next track`); }
-export function prev(): void { assertMac(); osa(`tell application "Music" to previous track`); }
+// Every transport command goes through this guard. A bare `tell application
+// "Music" to ...` LAUNCHES Music.app when it isn't running — verified: the tell
+// itself is the launch trigger, not the verb. Since now.source persists across
+// CLI invocations, a user who played Apple Music and then quit the app would
+// get it re-launched by a later /stop or /pause; `resume` was worst, since
+// `to play` boots the app AND starts playing.
+function ifRunning(verb: string): string {
+  return `if application "Music" is running then tell application "Music" to ${verb}`;
+}
+
+export function pause(): void { assertMac(); osa(ifRunning("pause")); }
+export function stop(): void { assertMac(); osa(ifRunning("stop")); }
+export function next(): void { assertMac(); osa(ifRunning("next track")); }
+export function prev(): void { assertMac(); osa(ifRunning("previous track")); }
 export function setVolume(percent: number): void {
   assertMac();
   const p = Math.max(0, Math.min(100, Math.round(percent)));
-  osa(`tell application "Music" to set sound volume to ${p}`);
+  osa(ifRunning(`set sound volume to ${p}`));
 }
 
-// "Song — Artist" of the current track, straight from the app.
+// resume() is the one command that SHOULD launch Music.app: the user explicitly
+// asked to hear the Apple Music they were playing, and refusing because they
+// quit the app would just be a silent no-op.
+export function resume(): void { assertMac(); osa(`tell application "Music" to play`); }
+
+// "Song — Artist" of the current track, straight from the app. Throws when
+// Music.app isn't running rather than launching it just to answer a read-only
+// question — both callers already catch and fall back to the recorded title.
 export function nowPlayingLine(): string {
   assertMac();
-  return osa(`tell application "Music" to (get name of current track) & " — " & (get artist of current track)`);
+  const out = osa(
+    `if application "Music" is running then ` +
+      `tell application "Music" to (get name of current track) & " — " & (get artist of current track)`,
+  );
+  if (!out) throw new Error("Music.app isn't running.");
+  return out;
 }

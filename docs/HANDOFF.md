@@ -1,7 +1,7 @@
 ﻿# PirateRadioFM — 交接文档 / Handoff
 
 > 给未来接手改代码的人（或 AI model）看的。目标：**5 分钟内理解这个项目的核心难点、不变量、以及"改 X 要动哪些文件"。**
-> 最后更新：2026-07（HÖR cookie 认证修复、统一 orphan-sweep host 集合、文档补全）。
+> 最后更新：2026-08（macOS 原生适配：锁系统重写、进程枚举修复、AppleScript 安全守卫、ffplay 音量修复、genre 校准）。
 
 ---
 
@@ -45,7 +45,7 @@ src/
   doctor.ts       环境诊断（/doctor）。只读，永不 throw，有 fail 时 CLI 退出码=1。
   state.ts        NowPlaying 状态 + anchor。withState() 是 tool handler 的标准包裹。
   registry.ts     跨进程锁保护的 player/watchdog PID 表。
-  lock.ts         跨进程锁原语（mkdir 原子性 + holder-pid + mtime 偷锁）。
+  lock.ts         跨进程锁原语（mkdir 原子性 + holder pid+token + atomic-rename 偷锁）。
   player.ts       本地播放器（mpv/ffplay）spawn + stop + orphan sweep。
   proc.ts         跨平台进程原语：pidAlive / startToken(防复用) / killPid / 找孤儿。
   watchdog.ts     detached 会话看门狗。
@@ -135,8 +135,8 @@ CI（`.github/workflows/ci.yml`）：ubuntu + windows + macos 三平台跑 `npm 
 - **版本号硬编码在 3 处且无一致性检查**：`package.json`、`.claude-plugin/plugin.json`、`src/index.ts`（MCP server 的 `version`）。发版要同时改 3 个地方，漏了不会有任何报错。想省心就在 selfcheck 里加一条断言。
 - **`.env.example` 说"复制成 `.env`"，但代码从不读 `.env`**（没有 dotenv，也没用 `--env-file`，只读 `process.env.*`）。照它做等于静默无效。真正生效的地方是 agent 的 MCP config 的 `env` 块，或者 shell 里 export——`docs/sources.md` 对 `HOER_COOKIES_FILE` 就是这么写的。要么给 `.env.example` 加上这句说明，要么真去加载 `.env`。
 - **withState 持锁跨越 Spotify API 往返**（可能几百 ms），30s 才偷锁。并发 tool call 罕见，可接受，但知道这点。
-- **anchor token 在中文 Windows 上是本地化字符串**（PowerShell CreationDate），只比较相等所以功能正常，看起来是乱码但无碍。
 - **外部源天然脆**：stream URL 会变、Spotify 需 Premium+active device、HÖR 依赖网页结构 + yt-dlp + YouTube cookies（会过期，需定期重新导出）、播客 RSS 格式各异。`/doctor` 是排障第一站。
+- **跨会话 stop()**：MCP server 的 `cleanup()` 和 `player.play()` 会 drain 全局 registry + orphan sweep，可能误杀同一台机器上另一个 pi 会话正在播放的音乐。MCP 有单实例守卫所以 MCP↔MCP 不冲突，但 MCP↔pi 共存时关掉 MCP 会话理论上能静默杀 pi 那边的播放器。实际影响小（pi 用户罕见），但如果要修：registry entry 加 anchor-pid 标记，drain 时只清自己的。
 
 ---
 
@@ -144,7 +144,7 @@ CI（`.github/workflows/ci.yml`）：ubuntu + windows + macos 三平台跑 `npm 
 
 运行时状态都在 `~/.pirate-radio/`：
 - `state.json` — NowPlaying（genre、音量、Spotify token 等），原子写 + 锁。
-- `state.lock` / `players.lock` — 两个独立锁域（互不阻塞）。
+- `state.lock/` / `players.lock/` — 两个独立锁域（互不阻塞）。每个锁目录内含 `holder` 文件（`pid\ntoken`），偷锁时用 `sameProcess` 防 PID 复用。
 - `anchor.json` — 会话 anchor（pid + start-token）。
 - `players.json` — player/watchdog PID registry。
 - `spotify.json` — OAuth token（`0o600` 权限）。

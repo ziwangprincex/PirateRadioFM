@@ -7,9 +7,12 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { tools } from "./tools.js";
-import { loadState, saveState, writeAnchor, clearAnchor, readAnchor, anchorAlive, withState } from "./state.js";
-import { now } from "./state.js";
+import { loadState, saveState, writeAnchor, clearAnchor, readAnchor, anchorAlive, withState, now, statePath as getStatePath } from "./state.js";
 import { stop } from "./player.js";
+import { killPid, findOrphanPlayers } from "./proc.js";
+import { sweepHosts } from "./dynhosts.js";
+import { readRegistryUnsafe, saveStateUnsafe } from "./lock.js";
+import { registryPath } from "./registry.js";
 
 // This server process is a child of the Claude Code session. Record its PID +
 // start-token as the "anchor": the detached watchdog spawned by the player polls
@@ -50,16 +53,32 @@ writeAnchor(process.pid);
 
 // Clean-exit fast path: when the server shuts down gracefully, stop the music
 // and clear the anchor ourselves instead of waiting for the watchdog's poll.
+//
+// CRITICAL: this MUST NOT acquire any lock. When a signal/stdin-close arrives
+// mid-tool-call, the state lock is held by THIS process on the same thread. Any
+// attempt to re-acquire it (even via a different code path) will Atomics.wait
+// for 30s, block the event loop, prevent the in-flight handler from ever
+// releasing, and self-deadlock — leaving clearAnchor unreachable and the
+// watchdog unable to detect the session death. Instead, read/write files
+// directly (best-effort, no atomicity guarantee — acceptable at exit time).
 let cleanedUp = false;
 function cleanup(): void {
   if (cleanedUp) return;
   cleanedUp = true;
   try {
-    stop();
-    saveState();
+    // Kill registered players/watchdogs without taking the registry lock.
+    const reg = readRegistryUnsafe(registryPath());
+    for (const p of reg.players) killPid(p.pid);
+    for (const w of reg.watchdogs) killPid(w.pid);
+    // Orphan sweep (no lock needed — it's a read + kill).
+    for (const pid of findOrphanPlayers(sweepHosts())) killPid(pid);
+    // Best-effort state save without lock.
+    now.state = "stopped";
+    now.source = null;
+    saveStateUnsafe(getStatePath(), now);
     clearAnchor();
   } catch {
-    /* best effort on the way out */
+    // Best effort on the way out. The watchdog is our backup.
   }
 }
 process.on("exit", cleanup);
@@ -114,10 +133,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const out = await withState(() => tool.handler(req.params.arguments ?? {}));
     return { content: [{ type: "text", text: out }] };
   } catch (e) {
-    // Handler threw AFTER partial state mutation: withState already released
-    // the lock without saving. Best-effort save now so any successful side
-    // effects (e.g. spotifyVerifier written before a fetch throw) still persist.
-    try { saveState(); } catch { /* ignore */ }
+    // withState now saves state on rejection, so partial mutations (e.g.
+    // spotifyVerifier, volume) are persisted. No fallback saveState() needed.
     return { content: [{ type: "text", text: `Error: ${(e as Error).message}` }], isError: true };
   }
 });

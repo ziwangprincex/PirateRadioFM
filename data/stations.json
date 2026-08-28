@@ -7,11 +7,15 @@
   "genres": {
     "jazz": {
       "label": "Jazz",
-      "description": "Traditional, contemporary, and avant-garde jazz.",
+      "description": "Straight-ahead jazz standards, contemporary jazz, and nu-jazz.",
       "stations": [
         {
           "name": "Radio Swiss Jazz",
           "url": "https://stream.srg-ssr.ch/m/rsj/mp3_128"
+        },
+        {
+          "name": "1.FM Classic Jazz",
+          "url": "https://strm112.1.fm/ajazz_mobile_mp3"
         },
         {
           "name": "SomaFM Sonic Universe",
@@ -55,7 +59,7 @@
     },
     "rock": {
       "label": "Rock",
-      "description": "Classic and album-oriented rock.",
+      "description": "Mellow album-oriented rock from the 1970s.",
       "stations": [
         {
           "name": "SomaFM Left Coast 70s",
@@ -199,8 +203,12 @@
     },
     "techno": {
       "label": "Techno / IDM",
-      "description": "Intelligent dance music and experimental beat-driven electronic music.",
+      "description": "Techno, industrial-electronic, and intelligent dance music.",
       "stations": [
+        {
+          "name": "SomaFM DEF CON Radio",
+          "url": "https://ice4.somafm.com/defcon-128-mp3"
+        },
         {
           "name": "SomaFM cliqhop idm",
           "url": "https://ice4.somafm.com/cliqhop-128-mp3"

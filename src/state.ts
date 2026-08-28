@@ -28,7 +28,7 @@ export interface NowPlaying {
 }
 
 const stateDir = join(homedir(), ".pirate-radio");
-const statePath = join(stateDir, "state.json");
+const stateFilePath = join(stateDir, "state.json");
 const stateLockPath = join(stateDir, "state.lock");
 // The MCP server writes its own PID + start-token here on startup. It is a child
 // of the Claude Code session, so when the session/terminal closes (even a hard
@@ -78,9 +78,18 @@ export async function withState<T>(fn: () => Promise<T> | T): Promise<T> {
   const run = (): Promise<T> =>
     withCrossProcessLock<Promise<T>>(stateLockPath, async () => {
       loadStateUnlocked();
-      const out = await fn();
-      saveStateUnlocked();
-      return out;
+      try {
+        const out = await fn();
+        saveStateUnlocked();
+        return out;
+      } catch (e) {
+        // Persist partial mutations even on handler failure. tools.ts intentionally
+        // mutates state BEFORE async calls (e.g. now.volume before playGenre, or
+        // now.spotifyVerifier before the token exchange). Discarding those leaves
+        // state.json lying about volume or breaks /spotify-complete-login.
+        saveStateUnlocked();
+        throw e;
+      }
     });
   const p = inProcTail.then(run, run);
   inProcTail = p.catch(() => { /* next caller runs regardless */ });
@@ -108,13 +117,13 @@ const fieldType: Record<keyof NowPlaying, "string" | "number"> = {
 };
 
 function loadStateUnlocked(): void {
-  if (!existsSync(statePath)) {
+  if (!existsSync(stateFilePath)) {
     Object.assign(now, defaults);
     return;
   }
   let raw: Record<string, unknown> = {};
   try {
-    raw = JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>;
+    raw = JSON.parse(readFileSync(stateFilePath, "utf8")) as Record<string, unknown>;
   } catch {
     // Whole-file parse failure — reset to defaults and move on. This is rare
     // (atomic write should prevent truncation) but if it happens the alternative
@@ -138,9 +147,9 @@ function loadStateUnlocked(): void {
 
 function saveStateUnlocked(): void {
   mkdirSync(stateDir, { recursive: true });
-  const tmp = `${statePath}.${process.pid}.tmp`;
+  const tmp = `${stateFilePath}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(now, null, 2));
-  renameSync(tmp, statePath);
+  renameSync(tmp, stateFilePath);
 }
 
 // Atomic write (temp + rename) so a hard-killed process can't leave a truncated
@@ -151,6 +160,9 @@ function saveStateUnlocked(): void {
 export function saveState(): void {
   withCrossProcessLock(stateLockPath, () => saveStateUnlocked());
 }
+
+// Exposed for the lock-free cleanup path in index.ts.
+export function statePath(): string { return stateFilePath; }
 
 // --- session anchor -------------------------------------------------------
 // The MCP server calls writeAnchor(process.pid) on startup. The watchdog reads

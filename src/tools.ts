@@ -61,9 +61,10 @@ export const tools: Tool[] = [
     description: "Pause playback (radio/podcast: stops the stream; Spotify/Apple Music: pauses the app).",
     schema: noArgs,
     handler: async () => {
-      if (now.state === "stopped") {
-        now.state = "stopped";
-        now.source = null;
+      if (now.state === "stopped" && !now.source) {
+        // Defensive: kill any orphaned player even if state says stopped (can
+        // happen after a state.json corruption/reset while mpv is alive).
+        player.stop();
         return "Stopped.";
       }
       if (!now.source) {

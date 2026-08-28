@@ -2,7 +2,7 @@
 import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);
 
 // src/state.ts
-import { readFileSync as readFileSync4, writeFileSync as writeFileSync3, renameSync as renameSync2, mkdirSync as mkdirSync3, existsSync as existsSync2, unlinkSync } from "node:fs";
+import { readFileSync as readFileSync4, writeFileSync as writeFileSync3, renameSync as renameSync3, mkdirSync as mkdirSync3, existsSync as existsSync3, unlinkSync } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { join as join3 } from "node:path";
 
@@ -39,7 +39,8 @@ function procStartToken(pid) {
       const out = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
         encoding: "utf8",
         timeout: 4e3,
-        windowsHide: true
+        windowsHide: true,
+        env: { ...process.env, LC_ALL: "C" }
       }).trim();
       return out ? `d:${out}` : null;
     }
@@ -149,23 +150,20 @@ function parseUnixPs(out, matches) {
 import {
   readFileSync as readFileSync3,
   writeFileSync as writeFileSync2,
-  renameSync,
+  renameSync as renameSync2,
   mkdirSync as mkdirSync2,
-  existsSync
+  existsSync as existsSync2
 } from "node:fs";
 import { homedir } from "node:os";
 import { join as join2 } from "node:path";
 
 // src/lock.ts
-import { mkdirSync, readFileSync as readFileSync2, writeFileSync, rmSync, rmdirSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync as readFileSync2, writeFileSync, renameSync, rmSync, rmdirSync, statSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 var LOCK_STALE_MS = 15e3;
 var LOCK_WAIT_MS = 3e4;
 function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-function statMtime(p) {
-  return statSync(p).mtimeMs;
 }
 function withCrossProcessLock(lockPath2, fn) {
   mkdirSync(dirname(lockPath2), { recursive: true });
@@ -177,24 +175,26 @@ function withCrossProcessLock(lockPath2, fn) {
       break;
     } catch {
       let broke = false;
-      let holderKnownAlive = false;
-      let missingHolder = false;
       try {
-        const holderPid = Number(readFileSync2(holderFile, "utf8").trim());
-        if (pidAlive(holderPid)) holderKnownAlive = true;
-        else broke = true;
+        const raw = readFileSync2(holderFile, "utf8").trim();
+        const parts = raw.split("\n");
+        const holderPid = Number(parts[0]);
+        const holderToken = parts[1] || null;
+        if (!sameProcess(holderPid, holderToken)) broke = true;
       } catch {
-        missingHolder = true;
-      }
-      if (!broke && missingHolder && !holderKnownAlive) {
         try {
-          const age = Date.now() - statMtime(lockPath2);
+          const age = Date.now() - statSync(lockPath2).mtimeMs;
           if (age > LOCK_STALE_MS) broke = true;
         } catch {
         }
       }
       if (broke) {
-        forceRelease(lockPath2);
+        const dead = `${lockPath2}.dead.${process.pid}`;
+        try {
+          renameSync(lockPath2, dead);
+          rmSync(dead, { recursive: true, force: true });
+        } catch {
+        }
         continue;
       }
       if (Date.now() > deadline) {
@@ -204,7 +204,9 @@ function withCrossProcessLock(lockPath2, fn) {
     }
   }
   try {
-    writeFileSync(holderFile, String(process.pid));
+    const token = procStartToken(process.pid) ?? "";
+    writeFileSync(holderFile, `${process.pid}
+${token}`);
     const result = fn();
     if (result && typeof result.then === "function") {
       return (async () => {
@@ -232,21 +234,15 @@ function release(lockPath2) {
   } catch {
   }
 }
-function forceRelease(lockPath2) {
-  try {
-    rmSync(lockPath2, { recursive: true, force: true });
-  } catch {
-  }
-}
 
 // src/registry.ts
 var dir = join2(homedir(), ".pirate-radio");
-var registryPath = join2(dir, "players.json");
+var regPath = join2(dir, "players.json");
 var lockPath = join2(dir, "players.lock");
 function readRaw() {
-  if (!existsSync(registryPath)) return { players: [], watchdogs: [] };
+  if (!existsSync2(regPath)) return { players: [], watchdogs: [] };
   try {
-    const r = JSON.parse(readFileSync3(registryPath, "utf8"));
+    const r = JSON.parse(readFileSync3(regPath, "utf8"));
     return { players: r.players ?? [], watchdogs: r.watchdogs ?? [] };
   } catch {
     return { players: [], watchdogs: [] };
@@ -254,9 +250,9 @@ function readRaw() {
 }
 function writeRaw(r) {
   mkdirSync2(dir, { recursive: true });
-  const tmp = `${registryPath}.${process.pid}.tmp`;
+  const tmp = `${regPath}.${process.pid}.tmp`;
   writeFileSync2(tmp, JSON.stringify(r, null, 2));
-  renameSync(tmp, registryPath);
+  renameSync2(tmp, regPath);
 }
 function withLock(fn) {
   return withCrossProcessLock(lockPath, () => {
@@ -287,7 +283,7 @@ function prune(list) {
 
 // src/state.ts
 var stateDir = join3(homedir2(), ".pirate-radio");
-var statePath = join3(stateDir, "state.json");
+var stateFilePath = join3(stateDir, "state.json");
 var stateLockPath = join3(stateDir, "state.lock");
 var anchorPath = join3(stateDir, "anchor.json");
 var defaults = {
@@ -306,7 +302,7 @@ var defaults = {
 var now = { ...defaults };
 var inProcTail = Promise.resolve();
 function readAnchor() {
-  if (!existsSync2(anchorPath)) return null;
+  if (!existsSync3(anchorPath)) return null;
   try {
     const a = JSON.parse(readFileSync4(anchorPath, "utf8"));
     if (typeof a.pid === "number" && a.pid > 0) {
@@ -324,7 +320,7 @@ function clearAnchor() {
 }
 
 // src/dynhosts.ts
-import { readFileSync as readFileSync6, writeFileSync as writeFileSync4, renameSync as renameSync3, mkdirSync as mkdirSync4, existsSync as existsSync3 } from "node:fs";
+import { readFileSync as readFileSync6, writeFileSync as writeFileSync4, renameSync as renameSync4, mkdirSync as mkdirSync4, existsSync as existsSync4 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
 import { join as join5 } from "node:path";
 
@@ -407,7 +403,7 @@ function hosts() {
 var dir2 = join5(homedir3(), ".pirate-radio");
 var path = join5(dir2, "dynamic-hosts.json");
 function dynamicHosts() {
-  if (!existsSync3(path)) return [];
+  if (!existsSync4(path)) return [];
   try {
     const arr = JSON.parse(readFileSync6(path, "utf8"));
     return Array.isArray(arr) ? arr.filter((h) => typeof h === "string") : [];
@@ -445,25 +441,26 @@ var POLL_MS = lifecycleTestMode ? 50 : 3e3;
 var TOKEN_EVERY = 10;
 var tick = 0;
 var timer = setInterval(() => {
-  tick++;
-  if (!pidAlive(playerPid) && livePlayers().length === 0) {
-    clearInterval(timer);
-    process.exit(0);
-  }
-  const cheapDead = !pidAlive(anchor.pid);
-  const reuseDead = !cheapDead && tick % TOKEN_EVERY === 0 && !sameProcess(anchor.pid, anchor.token);
-  if (cheapDead || reuseDead) {
-    clearInterval(timer);
-    if (kind === "pid") {
-      if (pidAlive(playerPid)) killPid(playerPid);
-      process.exit(0);
-    }
-    if (!stillOurAnchor()) {
+  try {
+    tick++;
+    if (!pidAlive(playerPid) && livePlayers().length === 0) {
       clearInterval(timer);
       process.exit(0);
     }
-    stopEverything();
-    clearInterval(timer);
-    process.exit(0);
+    const cheapDead = !pidAlive(anchor.pid);
+    const reuseDead = !cheapDead && tick % TOKEN_EVERY === 0 && !sameProcess(anchor.pid, anchor.token);
+    if (cheapDead || reuseDead) {
+      clearInterval(timer);
+      if (kind === "pid") {
+        if (pidAlive(playerPid)) killPid(playerPid);
+        process.exit(0);
+      }
+      if (!stillOurAnchor()) {
+        process.exit(0);
+      }
+      stopEverything();
+      process.exit(0);
+    }
+  } catch {
   }
 }, POLL_MS);

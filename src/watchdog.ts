@@ -78,6 +78,7 @@ const TOKEN_EVERY = 10; // re-verify token roughly every 30s in production
 let tick = 0;
 
 const timer = setInterval(() => {
+  try {
   tick++;
 
   // Our specific player gone AND no other registered players left → nothing to
@@ -104,12 +105,16 @@ const timer = setInterval(() => {
     // A concurrent session may have taken over the anchor file. If so, exit
     // quietly and let its own watchdog manage things — do not drain its state.
     if (!stillOurAnchor()) {
-      clearInterval(timer);
       process.exit(0);
     }
     stopEverything();
-    clearInterval(timer);
     process.exit(0);
+  }
+  } catch {
+    // Lock timeout or other transient failure. Do NOT let the exception kill us —
+    // an unhandled throw from setInterval is an uncaught exception that terminates
+    // the process, and a dead watchdog means music survives session close forever.
+    // Just skip this tick; the next one will retry.
   }
 }, POLL_MS);
 

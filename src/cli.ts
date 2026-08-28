@@ -3,7 +3,7 @@
 // This replaces the MCP stdio server for slash-command use: no protocol handshake,
 // no LLM tool selection — deterministic mapping from argv to a tool handler.
 import { tools } from "./tools.js";
-import { saveState, withState } from "./state.js";
+import { withState } from "./state.js";
 import { parseArgs } from "./argparse.js";
 import { doctor } from "./doctor.js";
 
@@ -47,9 +47,10 @@ async function main(): Promise<void> {
     const out = await withState(() => tool.handler(args));
     process.stdout.write(out + "\n");
   } catch (e) {
-    // Persist any partial state changes (e.g. verifier written before a failed
-    // fetch) — withState released the lock without saving on throw.
-    try { saveState(); } catch { /* ignore */ }
+    // withState already persists partial mutations on throw (e.g. spotifyVerifier,
+    // volume). No fallback saveState() here — the old one re-entered the same lock
+    // and, because cli.ts never calls loadState(), would clobber state.json with
+    // pristine defaults if the lock timed out.
     console.error(`Error: ${(e as Error).message}`);
     process.exit(1);
   }
