@@ -3,17 +3,20 @@
 // PIDs deliberately do NOT live here anymore — they're in registry.ts under a
 // cross-process lock, because two CLIs writing this file concurrently used to
 // lost-update each other's PID and orphan the player.
-import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, unlinkSync } from "node:fs";
-import { homedir } from "node:os";
+import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { procStartToken, sameProcess } from "./proc.js";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { dataDir, sessionId, readAnchor } from "./session.js";
+import { checkCancelled, operationSignal } from "./http.js";
+export { writeAnchor, clearAnchor, readAnchor, anchorAlive, type Anchor } from "./session.js";
 import { livePlayerCountUnlocked } from "./registry.js";
-import { withCrossProcessLock } from "./lock.js";
+import { withCrossProcessLock, acquireAsyncCrossProcessLock } from "./lock.js";
 
 export type PlayState = "stopped" | "playing" | "paused";
 export type Source = "radio" | "spotify" | "podcast" | "applemusic" | "hoer";
 
 export interface NowPlaying {
+  revision: number;
   state: PlayState;
   source: Source | null;
   genre: string | null;
@@ -27,17 +30,11 @@ export interface NowPlaying {
   episodeIndex: number;           // 0 = newest episode in the feed
 }
 
-const stateDir = join(homedir(), ".pirate-radio");
+const stateDir = dataDir();
 const stateFilePath = join(stateDir, "state.json");
 const stateLockPath = join(stateDir, "state.lock");
-// The MCP server writes its own PID + start-token here on startup. It is a child
-// of the Claude Code session, so when the session/terminal closes (even a hard
-// kill) this process dies. The watchdog polls this to know when to stop music.
-// The token defeats PID reuse: a recycled anchor PID won't match the token, so
-// the watchdog correctly treats the session as dead instead of "still alive".
-const anchorPath = join(stateDir, "anchor.json");
-
 const defaults: NowPlaying = {
+  revision: 0,
   state: "stopped",
   source: null,
   genre: null,
@@ -51,49 +48,87 @@ const defaults: NowPlaying = {
   episodeIndex: 0,
 };
 
-// Mutable proxy of the on-disk state. tools.ts writes to this via `now.x = y`,
-// then cli.ts calls saveState() before exiting.
-export const now: NowPlaying = { ...defaults };
-
+interface Transaction { draft: NowPlaying; base: NowPlaying; revision?: number; session: string; release?: () => void; }
+const transactions = new AsyncLocalStorage<Transaction | undefined>();
+const fallback = { ...defaults };
+export const now: NowPlaying = new Proxy(fallback, {
+  get: (target, key) => Reflect.get(transactions.getStore()?.draft ?? target, key),
+  set: (target, key, value) => Reflect.set(transactions.getStore()?.draft ?? target, key, value),
+  ownKeys: () => Reflect.ownKeys(defaults),
+  getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true }),
+});
 export function loadState(): void {
   withCrossProcessLock(stateLockPath, () => loadStateUnlocked());
 }
-
-// Run a mutation with state.json fresh-loaded on entry and atomically persisted
-// on exit, all under one lock acquisition. This is what tool handlers should use
-// instead of loadState/mutate/saveState separately — that pattern lets a second
-// writer sneak in between load and save and lost-update fields it didn't touch.
-// Serialize withState callers WITHIN this process before touching the cross-
-// process lock. That lock waits by spinning with a synchronous sleep: if a
-// second in-process caller (the MCP server handling two tool calls at once)
-// entered the spin while the first was mid-await holding the lock, the spin
-// would block the event loop and the first could never finish — a self-
-// deadlock resolved only by the 30s lock steal.
-let inProcTail: Promise<unknown> = Promise.resolve();
-
-export async function withState<T>(fn: () => Promise<T> | T): Promise<T> {
-  // Note the lock is held across the async fn — Spotify API calls can therefore
-  // hold it for hundreds of ms. Alternatives (optimistic reload-on-save) are
-  // more code for a tool where concurrent tool calls are rare. Keep it simple.
-  const run = (): Promise<T> =>
-    withCrossProcessLock<Promise<T>>(stateLockPath, async () => {
-      loadStateUnlocked();
-      try {
-        const out = await fn();
-        saveStateUnlocked();
-        return out;
-      } catch (e) {
-        // Persist partial mutations even on handler failure. tools.ts intentionally
-        // mutates state BEFORE async calls (e.g. now.volume before playGenre, or
-        // now.spotifyVerifier before the token exchange). Discarding those leaves
-        // state.json lying about volume or breaks /spotify-complete-login.
-        saveStateUnlocked();
-        throw e;
+function snapshot(): NowPlaying {
+  return transactions.run(undefined, () => {
+    loadStateUnlocked();
+    return { ...fallback };
+  });
+}
+function ensureCurrent(tx: Transaction, current: NowPlaying): void {
+  const anchor = readAnchor();
+  if ((!tx.release && tx.revision !== undefined && current.revision !== tx.revision) ||
+      (tx.session !== "legacy" && anchor?.sessionId !== tx.session) ||
+      (anchor?.sessionId && anchor.sessionId !== tx.session)) {
+    throw new Error("Playback request superseded by a newer command or session");
+  }
+}
+export async function withState<T>(fn: () => Promise<T> | T, mutation = false): Promise<T> {
+  const base = withCrossProcessLock(stateLockPath, () => {
+    const state = snapshot();
+    if (mutation) {
+      state.revision++;
+      writeSnapshot(state);
+    }
+    return state;
+  });
+  const tx: Transaction = { base, draft: { ...base }, revision: mutation ? base.revision : undefined, session: sessionId() };
+  return transactions.run(tx, async () => {
+    try {
+      const out = await fn();
+      if (!tx.release) checkCancelled();
+      withCrossProcessLock(stateLockPath, () => {
+        const latest = snapshot();
+        ensureCurrent(tx, latest);
+        for (const key of Object.keys(defaults) as (keyof NowPlaying)[]) {
+          if (key === "revision" || tx.draft[key] === tx.base[key]) continue;
+          if (latest[key] !== tx.base[key]) throw new Error(`Concurrent state update: ${key}`);
+          (latest as unknown as Record<string, unknown>)[key] = tx.draft[key];
+        }
+        writeSnapshot(latest);
+      });
+      return out;
+    } finally { tx.release?.(); }
+  });
+}
+// External effects are serialized separately from state reads/writes. Requests
+// resolve media first, then revalidate the intent immediately before acting.
+export async function playbackEffect<T>(fn: () => Promise<T> | T): Promise<T> {
+  checkCancelled();
+  const tx = transactions.getStore();
+  if (tx?.release) return await fn();
+  const releaseSession = await acquireAsyncCrossProcessLock(join(stateDir, "session.lock"), operationSignal());
+  let releasePlayback: (() => void) | undefined;
+  const release = () => { releasePlayback?.(); releaseSession(); };
+  try { releasePlayback = await acquireAsyncCrossProcessLock(join(stateDir, "playback.lock"), operationSignal()); }
+  catch (e) { releaseSession(); throw e; }
+  try {
+    checkCancelled();
+    if (tx) withCrossProcessLock(stateLockPath, () => {
+      const current = snapshot();
+      ensureCurrent(tx, current);
+      const draft = { ...current };
+      for (const key of Object.keys(defaults) as (keyof NowPlaying)[]) {
+        if (key !== "revision" && tx.draft[key] !== tx.base[key])
+          (draft as unknown as Record<string, unknown>)[key] = tx.draft[key];
       }
+      tx.base = current;
+      tx.draft = draft;
+      tx.release = release;
     });
-  const p = inProcTail.then(run, run);
-  inProcTail = p.catch(() => { /* next caller runs regardless */ });
-  return p;
+    return await fn();
+  } finally { if (!tx?.release) release(); }
 }
 
 // Internal read that the lock helper wraps. Also used by saveState so the
@@ -103,6 +138,7 @@ export async function withState<T>(fn: () => Promise<T> | T): Promise<T> {
 // would then reject a valid string value like "radio". If you add a NowPlaying
 // field, add its type here too.
 const fieldType: Record<keyof NowPlaying, "string" | "number"> = {
+  revision: "number",
   state: "string",
   source: "string",
   genre: "string",
@@ -139,16 +175,18 @@ function loadStateUnlocked(): void {
   // good fields even when one is corrupt.
   const target = now as unknown as Record<string, unknown>;
   for (const key of Object.keys(defaults) as (keyof NowPlaying)[]) {
-    const got = raw[key];
+    const got = raw?.[key];
     if ((got === null && defaults[key] === null) || typeof got === fieldType[key]) target[key] = got;
     else target[key] = defaults[key];
   }
+  if (!Number.isSafeInteger(now.revision) || now.revision < 0) now.revision = 0;
 }
 
-function saveStateUnlocked(): void {
+function saveStateUnlocked(): void { writeSnapshot({ ...now }); }
+function writeSnapshot(value: NowPlaying): void {
   mkdirSync(stateDir, { recursive: true });
   const tmp = `${stateFilePath}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(now, null, 2));
+  writeFileSync(tmp, JSON.stringify(value, null, 2));
   renameSync(tmp, stateFilePath);
 }
 
@@ -163,44 +201,6 @@ export function saveState(): void {
 
 // Exposed for the lock-free cleanup path in index.ts.
 export function statePath(): string { return stateFilePath; }
-
-// --- session anchor -------------------------------------------------------
-// The MCP server calls writeAnchor(process.pid) on startup. The watchdog reads
-// it via readAnchor() and polls anchorAlive() to detect session death.
-export interface Anchor { pid: number; token: string | null; }
-
-export function writeAnchor(pid: number): void {
-  mkdirSync(stateDir, { recursive: true });
-  const anchor: Anchor = { pid, token: procStartToken(pid) };
-  const tmp = `${anchorPath}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(anchor));
-  renameSync(tmp, anchorPath);
-}
-
-export function readAnchor(): Anchor | null {
-  if (!existsSync(anchorPath)) return null;
-  try {
-    const a = JSON.parse(readFileSync(anchorPath, "utf8")) as Partial<Anchor>;
-    if (typeof a.pid === "number" && a.pid > 0) {
-      return { pid: a.pid, token: a.token ?? null };
-    }
-  } catch {
-    /* corrupt anchor file */
-  }
-  return null;
-}
-
-// True iff the anchored session process is still the SAME live process. A reused
-// PID (session died, OS handed the number to something else) fails the token
-// check and returns false — which is what lets the watchdog stop the music.
-export function anchorAlive(anchor: Anchor | null): boolean {
-  if (!anchor) return false;
-  return sameProcess(anchor.pid, anchor.token);
-}
-
-export function clearAnchor(): void {
-  try { unlinkSync(anchorPath); } catch { /* already gone */ }
-}
 
 export function describe(): string {
   if (now.state === "stopped" || !now.source) return "Stopped.";

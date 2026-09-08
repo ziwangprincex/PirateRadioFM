@@ -1,10 +1,12 @@
+import { promisify } from "node:util";
+import { request, operationSignal } from "../http.js";
 // HÖR Berlin (hoer.live) source. HÖR has no Icecast/HLS audio endpoint — its
 // "radio" is a YouTube live stream embedded on the homepage (the same page
 // shows the latest archived set outside broadcast hours). So: scrape the
 // homepage for the current videoId, let yt-dlp resolve the direct audio URL,
 // and play it through the existing local player pipeline. Needs yt-dlp on PATH.
-import { execFileSync } from "node:child_process";
-import { now } from "../state.js";
+import { execFile } from "node:child_process";
+import { now, playbackEffect } from "../state.js";
 import * as player from "../player.js";
 import * as spotify from "./spotify.js";
 import * as applemusic from "./applemusic.js";
@@ -16,7 +18,7 @@ const HOME = "https://hoer.live/";
 const UA = { "User-Agent": "Mozilla/5.0" };
 
 async function currentVideo(): Promise<{ id: string; title: string | null }> {
-  const r = await fetch(HOME, { headers: UA, redirect: "follow" });
+  const r = await request(HOME, { headers: UA, redirect: "follow" });
   if (!r.ok) throw new Error(`hoer.live returned ${r.status}.`);
   const html = await r.text();
   // The homepage inlines the YT.Player init: videoId: 'coAiJFnN8Yw'
@@ -25,7 +27,7 @@ async function currentVideo(): Promise<{ id: string; title: string | null }> {
   const id = m[1];
   let title: string | null = null;
   try {
-    const o = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`);
+    const o = await request(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`);
     if (o.ok) title = ((await o.json()) as { title?: string }).title ?? null;
   } catch {
     /* title is cosmetic */
@@ -43,7 +45,7 @@ async function currentVideo(): Promise<{ id: string; title: string | null }> {
 //   HOER_COOKIES_FROM_BROWSER  — browser name for yt-dlp (chrome, firefox, edge,
 //                                brave, ...). Chrome/Edge must be closed on
 //                                Windows (they lock the cookie DB).
-function resolveAudioUrl(id: string): string {
+async function resolveAudioUrl(id: string): Promise<string> {
   const args = ["-g", "-f", "bestaudio/best"];
   const cookieFile = process.env.HOER_COOKIES_FILE?.trim();
   const browser = process.env.HOER_COOKIES_FROM_BROWSER?.trim();
@@ -53,7 +55,7 @@ function resolveAudioUrl(id: string): string {
 
   let out: string;
   try {
-    out = execFileSync("yt-dlp", args, { encoding: "utf8", timeout: 60_000, windowsHide: true });
+    out = (await promisify(execFile)("yt-dlp", args, { encoding: "utf8", timeout: 30_000, windowsHide: true, signal: operationSignal() })).stdout;
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT")
       throw new Error(
@@ -85,25 +87,26 @@ function resolveAudioUrl(id: string): string {
 
 export async function play(): Promise<string> {
   const { id, title } = await currentVideo();
-  const url = resolveAudioUrl(id);
-  // Silence remote sources before starting the local stream (same pattern as
-  // radio/podcast); player.play() kills any previous local player itself.
-  if (now.source === "spotify") {
-    try { await spotify.pause(); } catch { /* best effort */ }
-  }
-  if (now.source === "applemusic") applemusic.pauseIfRunning();
+  const url = await resolveAudioUrl(id);
   // Resolved googlevideo hosts differ per session — register for orphan sweep.
   try { rememberHost(new URL(url).host); } catch { /* sweep just won't cover it */ }
-  player.play(url, now.volume);
+  await playbackEffect(async () => {
+    // Silence remote sources before starting the local stream (same pattern as
+    // radio/podcast); player.play() kills any previous local player itself.
+    if (now.source === "spotify") {
+      try { await spotify.pause(); } catch { /* best effort */ }
+    }
+    if (now.source === "applemusic") applemusic.pauseIfRunning();
+    await player.play(url, now.volume);
+  });
   now.state = "playing";
   now.source = "hoer";
   now.title = title ?? "HÖR Berlin";
   return `> HÖR Berlin — ${title ?? "current show"}`;
 }
 
-// Resolved stream URLs expire after a few hours, so resume/volume-change
-// re-resolves from the homepage instead of reusing the old URL. This also
-// naturally picks up the live stream if HÖR went on air in the meantime.
+// Used only when the old player exited. A live player resumes in place via IPC;
+// on restart resolve a fresh URL because signed stream URLs can expire.
 export async function resume(): Promise<string> {
   return play();
 }

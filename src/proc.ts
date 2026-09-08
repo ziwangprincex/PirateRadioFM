@@ -93,6 +93,11 @@ export function sameProcess(pid: number, token: string | null): boolean {
   return cur === null ? true : cur === token;
 }
 
+// Verify a registered identity immediately before signalling it.
+export function killSameProcess(pid: number, token: string | null): void {
+  if (sameProcess(pid, token)) killPid(pid);
+}
+
 // --- killing ---------------------------------------------------------------
 // Terminate a process (and its children on Windows). Best-effort: a PID that is
 // already gone is a success, not an error.
@@ -127,17 +132,12 @@ export function killPid(pid: number | null | undefined): void {
 }
 
 // --- orphan discovery ------------------------------------------------------
-// Enumerate running mpv/ffplay processes whose command line references one of
-// `hosts` (our stream hosts). This is the safety net that catches players which
-// escaped the registry (crashed session, lost-update race, killed watchdog).
-// Returns their PIDs. Never throws — returns [] if enumeration fails.
-export function findOrphanPlayers(hosts: string[]): number[] {
-  if (hosts.length === 0) return [];
-  const wanted = hosts.map((h) => h.toLowerCase());
-  const matches = (cmd: string): boolean => {
-    const c = cmd.toLowerCase();
-    return wanted.some((h) => c.includes(h));
-  };
+// Only exact player process names carrying our session marker are eligible.
+// A shared stream hostname is NOT evidence that a process belongs to us.
+export function findOrphanPlayers(marker: string): number[] {
+  if (!/^pirate-radio-[a-f0-9]{24}$/.test(marker)) return [];
+  const matches = (cmd: string): boolean => cmd.split(/[\s\"]+/).some((arg) =>
+    arg === `--title=${marker}` || arg === marker);
   try {
     if (isWin) {
       // One PowerShell call: emit "PID<TAB>CommandLine" for mpv/ffplay.
@@ -153,8 +153,9 @@ export function findOrphanPlayers(hosts: string[]): number[] {
       );
       return parsePidLines(out, "\t", matches);
     }
-    // Unix: pid + full argv, tab-free so split on first run of spaces.
-    const out = execFileSync("ps", ["-eo", "pid=,args="], {
+    // Use the OS executable name, NOT arbitrary occurrences in argv. macOS
+    // ucomm is the basename; Linux comm provides the equivalent column.
+    const out = execFileSync("ps", ["-eo", isMac ? "pid=,ucomm=,args=" : "pid=,comm=,args="], {
       encoding: "utf8",
       timeout: 8000,
     });
@@ -180,18 +181,13 @@ function parsePidLines(
   return pids;
 }
 
-function parseUnixPs(out: string, matches: (cmd: string) => boolean): number[] {
+export function parseUnixPs(out: string, matches: (cmd: string) => boolean): number[] {
   const pids: number[] = [];
   for (const line of out.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const sp = trimmed.indexOf(" ");
-    if (sp === -1) continue;
-    const pid = Number(trimmed.slice(0, sp));
-    const cmd = trimmed.slice(sp + 1);
-    // Only mpv/ffplay, and only if pointed at one of our hosts.
-    if (!/(^|\/)(mpv|ffplay)\b/.test(cmd)) continue;
-    if (Number.isInteger(pid) && pid > 0 && matches(cmd)) pids.push(pid);
+    const row = line.trim().match(/^(\d+)\s+(mpv|ffplay)\s+([\s\S]+)$/);
+    if (!row) continue;
+    const pid = Number(row[1]);
+    if (Number.isInteger(pid) && pid > 0 && matches(row[3])) pids.push(pid);
   }
   return pids;
 }
@@ -233,8 +229,8 @@ function isPiProcess(name: string, args: string): boolean {
 // can itself contain spaces ("Core Audio Drive") — so a naive whitespace split
 // misaligns the comm column AND shifts a stray token into args. Instead take
 // only pid/ppid (always numeric, always first) and treat the entire remainder
-// as args, then derive `name` from argv[0]'s basename ourselves. That is the
-// same technique parseUnixPs() already uses.
+// as args, then derive `name` from argv[0]'s basename ourselves. This is
+// intentionally separate from the executable-name check used for players.
 function enumerateProcesses(): Map<number, ProcInfo> {
   const map = new Map<number, ProcInfo>();
   if (isWin) {

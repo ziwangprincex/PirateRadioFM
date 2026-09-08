@@ -1,121 +1,45 @@
 #!/usr/bin/env node
-// Detached watchdog. Spawned by player.play() when music starts, it outlives the
-// short-lived CLI process (like the player itself) and polls the session anchor
-// written by the MCP server. When the anchor dies — the Claude Code session
-// closed, the terminal was shut, or the process was hard-killed — the SessionEnd
-// hook is NOT guaranteed to fire, so this loop is what actually stops the music.
-//
-// Two correctness fixes over the naive version:
-//   1. PID-reuse guard: the anchor carries a start-time token. A bare PID probe
-//      can be fooled when the OS recycles the anchor's PID onto an unrelated
-//      process (music then plays forever). We re-verify the token so a recycled
-//      PID counts as "session dead".
-//   2. Sweep on death: instead of killing only the one player PID we were handed,
-//      we kill EVERY registered player/watchdog and then orphan-sweep by host,
-//      so nothing our tool started can survive the session.
-//
-// Invoked as: node dist/watchdog.js <anchorPid> <anchorToken> <playerPid> [kind]
-//
-// kind "file" (default): the anchor comes from the MCP server's anchor.json.
-//   On session death the watchdog drains the whole registry, sweeps orphans by
-//   host, and clears the anchor file — this session owns all of it.
-//
-// kind "pid": no anchor file at all (the pi skill path — pi runs no MCP
-//   server). The anchor is the pi process that spawned the CLI, and this
-//   watchdog's whole job is "stop the one player I was born for when pi dies".
-//   It must NOT touch anchor.json (a concurrent MCP session may own it) and
-//   must NOT drain the registry or sweep orphans (the registry is global —
-//   another pi session's player may live in it). If the guarded player is
-//   already gone, a newer play() took over; exit quietly and let that session's
-//   watchdog manage things.
-import { clearAnchor, readAnchor, type Anchor } from "./state.js";
-import { pidAlive, sameProcess, killPid, findOrphanPlayers } from "./proc.js";
-import { sweepHosts } from "./dynhosts.js";
+import { clearAnchor, readAnchor, withSessionLock, bindSession, playerMarker, type Anchor } from "./session.js";
+import { pidAlive, sameProcess, killSameProcess, killPid, findOrphanPlayers, procStartToken } from "./proc.js";
 import { lifecycleTestMode } from "./lifecycle-mode.js";
 import { drainAll, livePlayers } from "./registry.js";
+import { startWatchdogLoop } from "./watchdog-loop.js";
 
 const anchorPid = Number(process.argv[2]);
-const anchorToken = process.argv[3] ? process.argv[3] : null; // "" → null
+const anchorToken = process.argv[3] || null;
 const playerPid = Number(process.argv[4]);
 const kind = process.argv[5] === "pid" ? "pid" : "file";
-
-if (!Number.isInteger(anchorPid) || !Number.isInteger(playerPid)) {
-  process.exit(1);
-}
-
-const anchor: Anchor = { pid: anchorPid, token: anchorToken };
-
-// Cross-session safety: we only own the anchor file if the CURRENT anchor on
-// disk still matches the (pid, token) we were spawned for. If a newer session
-// has since overwritten anchor.json, we must NOT drain/clear on its behalf —
-// its own watchdog handles that. Silently exit instead.
+const id = process.argv[6] || "legacy";
+const playerToken = process.argv[7] || procStartToken(playerPid);
+if (!Number.isInteger(anchorPid) || anchorPid <= 0 || !Number.isInteger(playerPid) || playerPid <= 0) process.exit(1);
+bindSession(id);
+const anchor: Anchor = { pid: anchorPid, token: anchorToken, sessionId: id === "legacy" ? undefined : id };
 function stillOurAnchor(): boolean {
   const cur = readAnchor();
-  return !!cur && cur.pid === anchor.pid && (cur.token ?? null) === (anchor.token ?? null);
+  return !!cur && cur.pid === anchor.pid && cur.token === anchor.token && cur.sessionId === anchor.sessionId;
 }
-
-function stopEverything(): void {
-  const { players, watchdogs } = drainAll();
-  for (const p of players) killPid(p.pid);
-  for (const w of watchdogs) {
-    if (w.pid !== process.pid) killPid(w.pid); // don't kill ourselves early
-  }
-  // Safety net: anything pointed at our hosts that escaped the registry.
-  // sweepHosts() is shared with player.stop() so the two sweep sites can't drift
-  // apart again (they did: this one used to omit the dynamic hosts, exempting
-  // podcast/HÖR players from the session-death sweep).
-  for (const pid of findOrphanPlayers(sweepHosts())) killPid(pid);
-  clearAnchor();
+function stopOwned(): void {
+  const { players, watchdogs } = drainAll(id);
+  for (const p of players) killSameProcess(p.pid, p.token);
+  for (const w of watchdogs) if (w.pid !== process.pid) killSameProcess(w.pid, w.token);
+  for (const pid of findOrphanPlayers(playerMarker(id))) killPid(pid);
 }
-
-// Re-verifying the start token every poll is expensive on Windows (each check
-// cold-starts PowerShell, ~200-500ms). Do the cheap pidAlive probe often and
-// pay for the token re-verify rarely. Trade-off: worst-case delay between
-// session-death and music-stop is POLL_MS * TOKEN_EVERY = 30s. If that ever
-// matters more than CPU, cut TOKEN_EVERY back down.
 const POLL_MS = lifecycleTestMode ? 50 : 3000;
-const TOKEN_EVERY = 10; // re-verify token roughly every 30s in production
 let tick = 0;
-
-const timer = setInterval(() => {
-  try {
+startWatchdogLoop(POLL_MS, () => {
   tick++;
-
-  // Our specific player gone AND no other registered players left → nothing to
-  // guard, exit. (Another play() may have replaced ours; keep guarding then.)
-  if (!pidAlive(playerPid) && livePlayers().length === 0) {
-    clearInterval(timer);
-    process.exit(0);
+  if (kind === "file" && !stillOurAnchor()) return true;
+  if (!pidAlive(playerPid) && livePlayers(id).length === 0) return true;
+  const dead = !pidAlive(anchorPid) || (tick % 10 === 0 && !sameProcess(anchorPid, anchorToken));
+  if (!dead) return false;
+  if (kind === "pid") {
+    killSameProcess(playerPid, playerToken);
+    return true;
   }
-
-  // Cheap check first: PID clearly gone → session dead.
-  const cheapDead = !pidAlive(anchor.pid);
-  // Periodic authoritative check: PID alive but recycled onto another process.
-  const reuseDead =
-    !cheapDead && tick % TOKEN_EVERY === 0 && !sameProcess(anchor.pid, anchor.token);
-
-  if (cheapDead || reuseDead) {
-    clearInterval(timer);
-    if (kind === "pid") {
-      // Guard only OUR player (see header comment). If it's already gone, a
-      // newer play() replaced it — leave that session's music alone.
-      if (pidAlive(playerPid)) killPid(playerPid);
-      process.exit(0);
-    }
-    // A concurrent session may have taken over the anchor file. If so, exit
-    // quietly and let its own watchdog manage things — do not drain its state.
-    if (!stillOurAnchor()) {
-      process.exit(0);
-    }
-    stopEverything();
-    process.exit(0);
-  }
-  } catch {
-    // Lock timeout or other transient failure. Do NOT let the exception kill us —
-    // an unhandled throw from setInterval is an uncaught exception that terminates
-    // the process, and a dead watchdog means music survives session close forever.
-    // Just skip this tick; the next one will retry.
-  }
-}, POLL_MS);
-
-// Do NOT unref() — we want this timer to keep the process alive.
+  return withSessionLock(() => {
+    if (!stillOurAnchor()) return true;
+    stopOwned();
+    clearAnchor(anchor);
+    return true;
+  });
+}, () => process.exit(0));

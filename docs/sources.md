@@ -16,7 +16,7 @@ how each works, what it needs, and its known limits.
 | **HÖR** | local mpv/ffplay via yt-dlp | yt-dlp + YouTube cookies | all |
 
 `/pause` `/resume` `/next` `/prev` `/volume` `/stop` `/now-playing` work for all
-all five sources — they dispatch on whatever is currently playing. Switching sources
+five sources (full local controls require mpv) — they dispatch on whatever is currently playing. Switching sources
 silences the previous one automatically; you never get two audio streams at once.
 
 ## Podcast
@@ -33,11 +33,11 @@ through the same local player pipeline as radio.
 ```
 
 - Episode order: newest = 1, `/next` walks toward older episodes.
-- **Resume after pause restarts the episode from the top** — pause kills the
-  local player, so position is lost. A v1 trade-off; seeking needs mpv IPC.
-- Session-end auto-stop and the `/stop` orphan sweep work exactly like radio.
-  Podcast CDN hosts are recorded in `~/.pirate-radio/dynamic-hosts.json`
-  (capped at 20) so the sweep can match them.
+- mpv pause/resume preserves the episode position while the player lives; volume
+  changes do not restart playback. If the player exited, resume restarts the episode.
+- ffplay supports playback/stop, but in-place pause and volume require mpv.
+- Session-end cleanup matches session-specific player markers and registered PID
+  identities, never unrelated players listening to the same podcast CDN.
 
 ## Spotify
 

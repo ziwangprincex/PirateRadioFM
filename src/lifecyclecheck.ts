@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 // Cross-process lifecycle integration tests. Every test uses an isolated HOME
 // and only kills Node child processes it spawned itself.
 import { test } from "node:test";
@@ -11,7 +12,7 @@ import { fileURLToPath } from "node:url";
 const self = fileURLToPath(import.meta.url);
 
 function isolatedEnv(home: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return { ...process.env, HOME: home, USERPROFILE: home, ...extra };
+  return { ...process.env, PIRATE_RADIO_SESSION: "", HOME: home, USERPROFILE: home, ...extra };
 }
 
 function stateDir(home: string): string { return join(home, ".pirate-radio"); }
@@ -100,6 +101,33 @@ async function childMain(): Promise<boolean> {
     });
     return true;
   }
+  if (mode === "lock-stress" || mode === "lock-hold") {
+    const { withCrossProcessLock } = await import("./lock.js");
+    const dir = join(process.env.HOME!, ".pirate-radio");
+    const lock = join(dir, "stress.lock");
+    if (mode === "lock-hold") {
+      await withCrossProcessLock(lock, async () => {
+        writeFileSync(join(dir, "ready"), "ready");
+        await sleep(60_000);
+      });
+      return true;
+    }
+    for (let i = 0; i < 5; i++) {
+      await withCrossProcessLock(lock, async () => {
+        const guard = join(dir, "critical-section");
+        writeFileSync(guard, String(process.pid), { flag: "wx" });
+        try {
+          const counter = join(dir, "counter");
+          const value = existsSync(counter) ? Number(readFileSync(counter, "utf8")) : 0;
+          await sleep(10);
+          writeFileSync(counter, String(value + 1));
+        } finally {
+          rmSync(guard);
+        }
+      });
+    }
+    return true;
+  }
   if (mode === "player-stop") {
     const player = await import("./player.js");
     player.stop();
@@ -109,6 +137,42 @@ async function childMain(): Promise<boolean> {
 }
 
 if (!(await childMain())) {
+
+  test("six processes reclaim a legacy stale lock without overlapping critical sections", { concurrency: false }, async () => {
+    const home = makeHome();
+    const workers: ChildProcess[] = [];
+    try {
+      const lock = join(stateDir(home), "stress.lock");
+      mkdirSync(lock, { recursive: true });
+      writeFileSync(join(lock, "holder"), "999999997\ndead");
+      for (let i = 0; i < 6; i++) workers.push(child(home, ["lock-stress"]));
+      const results = await Promise.all(workers.map((p) => exitResult(p, 20_000)));
+      for (const result of results) assert.strictEqual(result.code, 0, result.stderr);
+      assert.strictEqual(readFileSync(join(stateDir(home), "counter"), "utf8"), "30");
+      assert.ok(!existsSync(lock));
+    } finally {
+      await Promise.all(workers.map((p) => stopAndWait(p)));
+      removeHome(home);
+    }
+  });
+
+  test("a hard-killed lock owner is reclaimed using its unique owner file", { concurrency: false }, async () => {
+    const home = makeHome();
+    const holder = child(home, ["lock-hold"]);
+    try {
+      await waitFor(() => existsSync(join(stateDir(home), "ready")), 5000);
+      assert.ok(holder.pid);
+      process.kill(holder.pid, "SIGKILL");
+      await waitFor(() => !alive(holder.pid), 5000);
+      const result = runChild(home, ["lock-stress"]);
+      assert.strictEqual(result.status, 0, result.stderr);
+      assert.strictEqual(readFileSync(join(stateDir(home), "counter"), "utf8"), "5");
+      assert.ok(!existsSync(join(stateDir(home), "stress.lock")));
+    } finally {
+      await stopAndWait(holder);
+      removeHome(home);
+    }
+  });
 
   test("concurrent state writers preserve each other's fields", { concurrency: false }, async () => {
     const home = makeHome();
@@ -200,6 +264,35 @@ if (!(await childMain())) {
     }
   });
 
+  test("simultaneous server starts elect exactly one owner atomically", { concurrency: false }, async () => {
+    const home = makeHome();
+    const serverPath = join(dirname(self), "index.js");
+    const servers = [0, 1].map(() => spawn(process.execPath, [serverPath], {
+      env: isolatedEnv(home), stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
+    }));
+    try {
+      await waitFor(() => servers.some((p) => p.exitCode === 2), 6000);
+      assert.equal(servers.filter((p) => alive(p.pid)).length, 1);
+      const anchor = JSON.parse(readFileSync(join(stateDir(home), "anchor.json"), "utf8"));
+      assert.equal(anchor.pid, servers.find((p) => alive(p.pid))?.pid);
+    } finally { await Promise.all(servers.map((p) => stopAndWait(p))); removeHome(home); }
+  });
+
+  test("explicit session scopes run concurrently without sharing anchor ownership", { concurrency: false }, async () => {
+    const home = makeHome();
+    const servers = ["alpha", "beta"].map((id) => spawn(process.execPath, [join(dirname(self), "index.js")], {
+      env: isolatedEnv(home, { PIRATE_RADIO_SESSION: id }), stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
+    }));
+    try {
+      for (const id of ["alpha", "beta"]) {
+        const scope = createHash("sha256").update(id).digest("hex").slice(0, 24);
+        await waitFor(() => existsSync(join(stateDir(home), "sessions", scope, "anchor.json")), 5000);
+      }
+      await stopAndWait(servers[0]);
+      assert.ok(alive(servers[1].pid));
+    } finally { await Promise.all(servers.map((p) => stopAndWait(p))); removeHome(home); }
+  });
+
   test("an old watchdog leaves a player alone after a newer session takes the anchor", { concurrency: false }, async () => {
     const home = makeHome();
     const player = sleeper();
@@ -226,7 +319,7 @@ if (!(await childMain())) {
     }
   });
 
-  test("orphan sweep stops an unregistered player pointed at a bundled stream host", { concurrency: false }, async () => {
+  test("orphan sweep stops an unregistered marked player but preserves unmarked same-host playback", { concurrency: false }, async () => {
     const home = makeHome();
     const bin = join(home, "bin");
     mkdirSync(bin, { recursive: true });
@@ -236,7 +329,9 @@ if (!(await childMain())) {
     const uniqueHost = `lifecycle-${process.pid}-${Date.now()}.invalid`;
     mkdirSync(stateDir(home), { recursive: true });
     writeFileSync(join(stateDir(home), "dynamic-hosts.json"), JSON.stringify([uniqueHost]));
-    const orphan = spawn(fakePlayer, ["-e", "setInterval(() => {}, 1000)", `https://${uniqueHost}/test`], {
+    const marker = `pirate-radio-${createHash("sha256").update(`${stateDir(home)}:legacy`).digest("hex").slice(0, 24)}`;
+    const manual = spawn(fakePlayer, ["-e", "setInterval(() => {}, 1000)", `https://${uniqueHost}/test`], { stdio: "ignore", windowsHide: true });
+    const orphan = spawn(fakePlayer, ["-e", "setInterval(() => {}, 1000)", `https://${uniqueHost}/test`, `--title=${marker}`], {
       stdio: "ignore", windowsHide: true,
     });
     try {
@@ -245,8 +340,10 @@ if (!(await childMain())) {
       const stopped = runChild(home, ["player-stop"]);
       assert.strictEqual(stopped.status, 0, stopped.stderr);
       await waitFor(() => !alive(orphan.pid), 5000);
+      assert.ok(alive(manual.pid), "unmarked player at the same host must survive");
     } finally {
       await stopAndWait(orphan);
+      await stopAndWait(manual);
       removeHome(home);
     }
   });

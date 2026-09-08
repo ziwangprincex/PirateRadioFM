@@ -1,10 +1,11 @@
+import { request, checkCancelled, wait } from "../http.js";
 // Podcast source: iTunes Search API (no auth) → RSS feed → episode audio URL →
 // the existing local player pipeline. Fully cross-platform, zero login.
 // ponytail: no XML dependency — a podcast RSS <item> is regular enough that a
 // scoped regex parse (enclosure url + title) is fine; anything unparseable is
 // simply skipped. next/prev refetch the feed rather than caching episodes:
 // one HTTP GET per skip keeps state tiny and the list always fresh.
-import { now } from "../state.js";
+import { now, playbackEffect } from "../state.js";
 import * as player from "../player.js";
 import * as spotify from "./spotify.js";
 import * as applemusic from "./applemusic.js";
@@ -48,7 +49,7 @@ export function parseFeed(xml: string): { channel: string | null; episodes: Epis
 }
 
 async function fetchText(url: string): Promise<string> {
-  const r = await fetch(url, { redirect: "follow" });
+  const r = await request(url, { redirect: "follow" });
   if (!r.ok) throw new Error(`Fetch failed (${r.status}) for ${url}`);
   return r.text();
 }
@@ -80,26 +81,29 @@ export function embeddedDirectUrl(url: string): string | null {
 // Probe a URL with a 1-byte range GET; returns the URL to hand the player
 // (the probed one — stable — not the post-redirect signed CDN url, which can
 // expire mid-episode) or null if it doesn't answer 2xx.
-async function probe(url: string): Promise<string | null> {
+async function probe(url: string, budgetMs = 2500): Promise<string | null> {
   try {
-    const r = await fetch(url, {
+    const r = await request(url, {
       redirect: "follow",
       headers: { Range: "bytes=0-0", "User-Agent": "Mozilla/5.0" },
-    });
+    }, { probe: true, timeoutMs: Math.min(2500, budgetMs), budgetMs, retries: 0 });
     try { await r.body?.cancel(); } catch { /* already closed */ }
     return r.ok ? url : null;
   } catch {
+    checkCancelled();
     return null;
   }
 }
 
 async function resolveDirect(url: string): Promise<string> {
   const direct = embeddedDirectUrl(url);
-  for (let attempt = 0; attempt < 3; attempt++) {
+  const deadline = Date.now() + 10_000;
+  for (let attempt = 0; attempt < 3 && Date.now() < deadline; attempt++) {
     // Prefer the de-tracked direct URL; fall back to the full chain as-is.
-    if (direct && (await probe(direct))) return direct;
-    if (await probe(url)) return url;
-    await new Promise((res) => setTimeout(res, 300));
+    if (direct && Date.now() < deadline && (await probe(direct, deadline - Date.now()))) return direct;
+    if (Date.now() < deadline && await probe(url, deadline - Date.now())) return url;
+    if (Date.now() >= deadline) break;
+    await wait(Math.min(300, deadline - Date.now()));
   }
   return url; // let the player try anyway — it retries nothing, but who knows
 }
@@ -122,15 +126,17 @@ async function playIndex(feedUrl: string, name: string | null, index: number): P
   if (episodes.length === 0) throw new Error("The feed has no playable episodes (no audio enclosures).");
   const i = Math.max(0, Math.min(index, episodes.length - 1));
   const ep = episodes[i];
-  // Silence remote sources before starting the local stream (same rationale as
-  // radio.playGenre); player.play() itself kills any previous local player.
-  if (now.source === "spotify") {
-    try { await spotify.pause(); } catch { /* best effort */ }
-  }
-  if (now.source === "applemusic") applemusic.pauseIfRunning();
   const direct = await resolveDirect(ep.url);
   try { rememberHost(new URL(direct).host); } catch { /* odd URL — sweep just won't cover it */ }
-  player.play(direct, now.volume);
+  await playbackEffect(async () => {
+    // Silence remote sources before starting the local stream (same rationale as
+    // radio.playGenre); player.play() itself kills any previous local player.
+    if (now.source === "spotify") {
+      try { await spotify.pause(); } catch { /* best effort */ }
+    }
+    if (now.source === "applemusic") applemusic.pauseIfRunning();
+    await player.play(direct, now.volume);
+  });
   const displayName = name ?? channel ?? feedUrl;
   now.state = "playing";
   now.source = "podcast";
@@ -163,8 +169,7 @@ export async function prev(): Promise<string> {
   return playIndex(requireCurrent(), now.podcastName, now.episodeIndex - 1);
 }
 
-// Restart the current episode (from the top — mpv was killed on pause, so the
-// position is gone; good enough for v1 and documented).
+// Explicit fallback when the old player has exited; live mpv resumes via IPC.
 export async function resume(): Promise<string> {
   return playIndex(requireCurrent(), now.podcastName, now.episodeIndex);
 }

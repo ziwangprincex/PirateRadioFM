@@ -1,12 +1,14 @@
+import { withAsyncCrossProcessLock } from "../lock.js";
+import { request, wait, checkCancelled, operationSignal } from "../http.js";
 // Spotify source: OAuth PKCE login + remote control of an ALREADY-RUNNING Spotify client.
 // The Web API cannot output audio itself — it commands a Connect device. Requires Premium.
 // ponytail: no third-party SDK. Raw fetch + a JSON token cache on disk. Add a real HTTP
 // callback server only if the manual paste flow proves annoying.
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
-import { now } from "../state.js";
+import { now, playbackEffect } from "../state.js";
 import { stop as stopLocal } from "../player.js";
 
 const API = "https://api.spotify.com/v1";
@@ -69,7 +71,9 @@ function loadTokens(): Tokens | null {
 function saveTokens(t: Tokens): void {
   mkdirSync(cfgDir, { recursive: true });
   // 0o600: refresh_token grants long-lived account access — no other user needs to read it.
-  writeFileSync(tokenPath, JSON.stringify(t, null, 2), { mode: 0o600 });
+  const tmp = `${tokenPath}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(t, null, 2), { mode: 0o600 });
+  renameSync(tmp, tokenPath);
 }
 
 // Step 1: build the authorize URL. User opens it, approves, and pastes back the ?code=.
@@ -99,7 +103,7 @@ export async function complete(code: string): Promise<void> {
     client_id: clientId(),
     code_verifier: v,
   });
-  const r = await fetch(`${AUTH}/api/token`, {
+  const r = await request(`${AUTH}/api/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
@@ -115,48 +119,32 @@ export async function complete(code: string): Promise<void> {
   now.spotifyVerifier = null;
 }
 
-// In-flight refresh promise: if two callers hit accessToken() while the token
-// is expiring, both should share the same POST /api/token rather than race and
-// double-write. Set inside the refresh path and cleared when it settles.
-// Scope note: this only dedupes WITHIN one process. Two separate CLI processes
-// can still both refresh; that costs one wasted POST and the losing writer's
-// tokens are overwritten — acceptable since refreshes happen ~hourly.
-let refreshInFlight: Promise<string> | null = null;
-
+// Serialize refresh across CLI processes without holding the playback/state
+// lock. Re-read inside the lock so only one caller exchanges an expired token.
 async function accessToken(): Promise<string> {
-  const t = loadTokens();
-  if (!t) throw new Error("Not logged in to Spotify. Run spotify_login.");
-  if (Date.now() < t.expires_at - 30_000) return t.access_token;
-  if (refreshInFlight) return refreshInFlight;
-  refreshInFlight = (async () => {
-    try {
-      const body = new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: t.refresh_token,
-        client_id: clientId(),
-      });
-      const r = await fetch(`${AUTH}/api/token`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body,
-      });
-      if (!r.ok) throw new Error(`Token refresh failed: ${await r.text()}`);
-      const j = (await r.json()) as TokenResponse;
-      if (!j.access_token) throw new Error("Token refresh returned no access token — run spotify_login again.");
-      const ttl = Number(j.expires_in) || 3600;
-      const next: Tokens = { access_token: j.access_token, refresh_token: j.refresh_token ?? t.refresh_token, expires_at: Date.now() + ttl * 1000 };
-      saveTokens(next);
-      return next.access_token;
-    } finally {
-      refreshInFlight = null;
-    }
-  })();
-  return refreshInFlight;
+  const cached = loadTokens();
+  if (!cached) throw new Error("Not logged in to Spotify. Run spotify_login.");
+  if (Date.now() < cached.expires_at - 30_000) return cached.access_token;
+  return withAsyncCrossProcessLock(join(cfgDir, "spotify.lock"), async () => {
+    const t = loadTokens();
+    if (!t) throw new Error("Not logged in to Spotify. Run spotify_login.");
+    if (Date.now() < t.expires_at - 30_000) return t.access_token;
+    const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token: t.refresh_token, client_id: clientId() });
+    const r = await request(`${AUTH}/api/token`, {
+      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body,
+    });
+    if (!r.ok) throw new Error(`Token refresh failed (${r.status}); run spotify_login again.`);
+    const j = (await r.json()) as TokenResponse;
+    if (!j.access_token) throw new Error("Token refresh returned no access token — run spotify_login again.");
+    const ttl = Number(j.expires_in) || 3600;
+    saveTokens({ access_token: j.access_token, refresh_token: j.refresh_token ?? t.refresh_token, expires_at: Date.now() + ttl * 1000 });
+    return j.access_token;
+  }, operationSignal());
 }
 
 async function api(path: string, init?: RequestInit): Promise<Response> {
   const tok = await accessToken();
-  const r = await fetch(`${API}${path}`, {
+  const r = await request(`${API}${path}`, {
     ...init,
     headers: { ...(init?.headers ?? {}), Authorization: `Bearer ${tok}` },
   });
@@ -330,8 +318,10 @@ export async function playContext(uriOrName: string): Promise<string> {
   // network) we bail and leave the local radio stream alone — otherwise we'd
   // kill the user's current audio and then give them an error, ending in
   // silence. Only silence local playback once Spotify has committed.
-  await playWithRecovery(playBody(uri));
-  stopLocal();
+  await playbackEffect(async () => {
+    await playWithRecovery(playBody(uri));
+    stopLocal();
+  });
   now.state = "playing";
   now.source = "spotify";
   now.title = displayName;
@@ -368,13 +358,13 @@ async function launchAndWaitForDevice(): Promise<string | null> {
   }
   // The desktop app registers with Spotify Connect a few seconds after launch.
   for (let i = 0; i < 6; i++) {
-    await new Promise((res) => setTimeout(res, 2000));
+    await wait(2000);
     try {
       const ds = await deviceList();
       const d = ds.find((x) => x.type.toLowerCase() === "computer") ?? ds[0];
       if (d) return d.id;
     } catch {
-      /* keep polling */
+      checkCancelled();
     }
   }
   return null;

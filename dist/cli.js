@@ -1,15 +1,108 @@
 #!/usr/bin/env node
 import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);
 
+// src/http.ts
+import { AsyncLocalStorage } from "node:async_hooks";
+import { setTimeout as delay } from "node:timers/promises";
+var context = new AsyncLocalStorage();
+function operationSignal() {
+  return context.getStore();
+}
+function checkCancelled() {
+  operationSignal()?.throwIfAborted();
+}
+async function withBudget(fn, signal, ms = 45e3) {
+  const ac = new AbortController();
+  const timeout = setTimeout(() => ac.abort(new Error("Operation timed out")), ms);
+  const abort = () => ac.abort(signal?.reason ?? new Error("Operation cancelled"));
+  signal?.addEventListener("abort", abort, { once: true });
+  if (signal?.aborted) abort();
+  try {
+    return await context.run(ac.signal, fn);
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", abort);
+  }
+}
+async function wait(ms) {
+  checkCancelled();
+  await delay(ms, void 0, { signal: operationSignal() });
+}
+async function request(url, init = {}, options = {}) {
+  const deadline = Date.now() + (options.budgetMs ?? 15e3);
+  const method = (init.method ?? "GET").toUpperCase();
+  const retries = ["GET", "HEAD"].includes(method) ? options.retries ?? 1 : 0;
+  const parent = init.signal ?? operationSignal();
+  for (let attempt = 0; ; attempt++) {
+    parent?.throwIfAborted();
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error("HTTP retry budget exhausted");
+    const ac = new AbortController();
+    const abort = () => ac.abort(parent?.reason ?? new Error("Request cancelled"));
+    parent?.addEventListener("abort", abort, { once: true });
+    const timer = setTimeout(() => ac.abort(new Error("HTTP request timed out")), Math.min(options.timeoutMs ?? 8e3, remaining));
+    let retryDelay = 200 * (attempt + 1);
+    try {
+      const response = await fetch(url, { ...init, signal: ac.signal });
+      if (attempt < retries && [429, 502, 503, 504].includes(response.status)) {
+        const retryAfter = response.headers.get("retry-after");
+        if (retryAfter) {
+          const seconds = Number(retryAfter);
+          retryDelay = Number.isFinite(seconds) ? seconds * 1e3 : Math.max(0, Date.parse(retryAfter) - Date.now());
+        }
+        await response.body?.cancel();
+      } else {
+        if (options.probe || method === "HEAD" || [204, 205, 304].includes(response.status)) {
+          await response.body?.cancel();
+          return new Response(null, { status: response.status, statusText: response.statusText, headers: response.headers });
+        }
+        const reader = response.body?.getReader();
+        const chunks = [];
+        let size = 0;
+        if (reader) {
+          try {
+            for (; ; ) {
+              const part = await reader.read();
+              if (part.done) break;
+              size += part.value.length;
+              if (size > (options.maxBytes ?? 4 * 1024 * 1024)) throw new Error("HTTP response exceeds size limit");
+              chunks.push(part.value);
+            }
+          } catch (e) {
+            await reader.cancel().catch(() => {
+            });
+            throw e;
+          } finally {
+            reader.releaseLock();
+          }
+        }
+        return new Response(Buffer.concat(chunks), { status: response.status, statusText: response.statusText, headers: response.headers });
+      }
+    } catch (e) {
+      parent?.throwIfAborted();
+      if (attempt >= retries) throw e;
+    } finally {
+      clearTimeout(timer);
+      parent?.removeEventListener("abort", abort);
+    }
+    if (!Number.isFinite(retryDelay) || retryDelay >= deadline - Date.now()) throw new Error("HTTP retry budget exhausted");
+    await delay(Math.max(0, retryDelay), void 0, { signal: parent ?? void 0 });
+  }
+}
+
 // src/player.ts
 import { spawn, execFileSync as execFileSync2 } from "node:child_process";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
-import { dirname as dirname3, join as join6 } from "node:path";
+import { fileURLToPath } from "node:url";
+import { dirname as dirname2, join as join4 } from "node:path";
+import { mkdirSync as mkdirSync4, rmSync as rmSync2 } from "node:fs";
+import { tmpdir } from "node:os";
+import { randomUUID as randomUUID3 } from "node:crypto";
 
-// src/state.ts
-import { readFileSync as readFileSync4, writeFileSync as writeFileSync3, renameSync as renameSync3, mkdirSync as mkdirSync3, existsSync as existsSync3, unlinkSync } from "node:fs";
-import { homedir as homedir2 } from "node:os";
-import { join as join3 } from "node:path";
+// src/session.ts
+import { homedir } from "node:os";
+import { join as join2 } from "node:path";
+import { createHash, randomUUID as randomUUID2 } from "node:crypto";
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync2, renameSync as renameSync2, unlinkSync as unlinkSync2 } from "node:fs";
 
 // src/proc.ts
 import { execFileSync } from "node:child_process";
@@ -71,6 +164,9 @@ function sameProcess(pid, token) {
   const cur = procStartToken(pid);
   return cur === null ? true : cur === token;
 }
+function killSameProcess(pid, token) {
+  if (sameProcess(pid, token)) killPid(pid);
+}
 function killPid(pid) {
   if (!pid || !Number.isInteger(pid) || pid <= 0) return;
   try {
@@ -96,13 +192,9 @@ function killPid(pid) {
   } catch {
   }
 }
-function findOrphanPlayers(hosts2) {
-  if (hosts2.length === 0) return [];
-  const wanted = hosts2.map((h) => h.toLowerCase());
-  const matches = (cmd) => {
-    const c = cmd.toLowerCase();
-    return wanted.some((h) => c.includes(h));
-  };
+function findOrphanPlayers(marker) {
+  if (!/^pirate-radio-[a-f0-9]{24}$/.test(marker)) return [];
+  const matches = (cmd) => cmd.split(/[\s\"]+/).some((arg) => arg === `--title=${marker}` || arg === marker);
   try {
     if (isWin) {
       const out2 = execFileSync(
@@ -116,7 +208,7 @@ function findOrphanPlayers(hosts2) {
       );
       return parsePidLines(out2, "	", matches);
     }
-    const out = execFileSync("ps", ["-eo", "pid=,args="], {
+    const out = execFileSync("ps", ["-eo", isMac ? "pid=,ucomm=,args=" : "pid=,comm=,args="], {
       encoding: "utf8",
       timeout: 8e3
     });
@@ -139,14 +231,10 @@ function parsePidLines(out, sep, matches) {
 function parseUnixPs(out, matches) {
   const pids = [];
   for (const line of out.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const sp = trimmed.indexOf(" ");
-    if (sp === -1) continue;
-    const pid = Number(trimmed.slice(0, sp));
-    const cmd = trimmed.slice(sp + 1);
-    if (!/(^|\/)(mpv|ffplay)\b/.test(cmd)) continue;
-    if (Number.isInteger(pid) && pid > 0 && matches(cmd)) pids.push(pid);
+    const row = line.trim().match(/^(\d+)\s+(mpv|ffplay)\s+([\s\S]+)$/);
+    if (!row) continue;
+    const pid = Number(row[1]);
+    if (Number.isInteger(pid) && pid > 0 && matches(row[3])) pids.push(pid);
   }
   return pids;
 }
@@ -220,87 +308,41 @@ function findPiProcess() {
   return null;
 }
 
-// src/registry.ts
-import {
-  readFileSync as readFileSync3,
-  writeFileSync as writeFileSync2,
-  renameSync as renameSync2,
-  mkdirSync as mkdirSync2,
-  existsSync as existsSync2
-} from "node:fs";
-import { homedir } from "node:os";
-import { join as join2 } from "node:path";
-
 // src/lock.ts
-import { mkdirSync, readFileSync as readFileSync2, writeFileSync, renameSync, rmSync, rmdirSync, statSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync as readFileSync2, writeFileSync, renameSync, rmSync, rmdirSync, statSync, existsSync, readdirSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
 var LOCK_STALE_MS = 15e3;
 var LOCK_WAIT_MS = 3e4;
 function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
-function withCrossProcessLock(lockPath2, fn) {
-  mkdirSync(dirname(lockPath2), { recursive: true });
-  const holderFile = join(lockPath2, "holder");
-  const deadline = Date.now() + LOCK_WAIT_MS;
-  for (; ; ) {
-    try {
-      mkdirSync(lockPath2);
-      break;
-    } catch {
-      let broke = false;
-      try {
-        const raw = readFileSync2(holderFile, "utf8").trim();
-        const parts = raw.split("\n");
-        const holderPid = Number(parts[0]);
-        const holderToken = parts[1] || null;
-        if (!sameProcess(holderPid, holderToken)) broke = true;
-      } catch {
-        try {
-          const age = Date.now() - statSync(lockPath2).mtimeMs;
-          if (age > LOCK_STALE_MS) broke = true;
-        } catch {
-        }
-      }
-      if (broke) {
-        const dead = `${lockPath2}.dead.${process.pid}`;
-        try {
-          renameSync(lockPath2, dead);
-          rmSync(dead, { recursive: true, force: true });
-        } catch {
-        }
-        continue;
-      }
-      if (Date.now() > deadline) {
-        throw new Error(`Timed out waiting for lock: ${lockPath2}`);
-      }
-      sleep(50);
-    }
-  }
+function reclaimDeadOwner(lockPath2) {
   try {
-    const token = procStartToken(process.pid) ?? "";
-    writeFileSync(holderFile, `${process.pid}
-${token}`);
-    const result = fn();
-    if (result && typeof result.then === "function") {
-      return (async () => {
-        try {
-          return await result;
-        } finally {
-          release(lockPath2);
-        }
-      })();
+    const files = readdirSync(lockPath2);
+    if (files.length === 0) {
+      if (Date.now() - statSync(lockPath2).mtimeMs > LOCK_STALE_MS) rmdirSync(lockPath2);
+      return;
     }
-    release(lockPath2);
-    return result;
-  } catch (e) {
-    release(lockPath2);
-    throw e;
+    if (files.length !== 1) return;
+    const name = files[0];
+    if (name !== "holder" && !/^holder-[0-9a-f-]{36}$/.test(name)) return;
+    const holder = join(lockPath2, name);
+    const [pidText, token] = readFileSync2(holder, "utf8").trim().split("\n");
+    const pid = Number(pidText);
+    if (!Number.isInteger(pid) || pid <= 0) {
+      if (Date.now() - statSync(holder).mtimeMs <= LOCK_STALE_MS) return;
+    } else if (sameProcess(pid, token || null)) {
+      return;
+    }
+    unlinkSync(holder);
+    rmdirSync(lockPath2);
+  } catch {
   }
 }
-function release(lockPath2) {
+function release(lockPath2, owner) {
   try {
-    rmSync(join(lockPath2, "holder"), { force: true });
+    unlinkSync(join(lockPath2, owner));
   } catch {
   }
   try {
@@ -308,25 +350,155 @@ function release(lockPath2) {
   } catch {
   }
 }
+function* acquireSteps(lockPath2) {
+  mkdirSync(dirname(lockPath2), { recursive: true });
+  const id = randomUUID();
+  const owner = `holder-${id}`;
+  const staged = `${lockPath2}.claim.${process.pid}.${id}`;
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  mkdirSync(staged);
+  try {
+    writeFileSync(join(staged, owner), `${process.pid}
+${procStartToken(process.pid) ?? ""}`);
+    for (; ; ) {
+      try {
+        renameSync(staged, lockPath2);
+        return owner;
+      } catch (e) {
+        const code = e.code;
+        const occupied = code === "EEXIST" || code === "ENOTEMPTY";
+        const windowsOccupied = (code === "EPERM" || code === "EACCES") && existsSync(lockPath2);
+        if (!occupied && !windowsOccupied) throw e;
+      }
+      if (Date.now() >= deadline) throw new Error(`Timed out waiting for lock: ${lockPath2}`);
+      reclaimDeadOwner(lockPath2);
+      yield;
+    }
+  } finally {
+    rmSync(staged, { recursive: true, force: true });
+  }
+}
+function withCrossProcessLock(lockPath2, fn) {
+  const steps = acquireSteps(lockPath2);
+  let step = steps.next();
+  while (!step.done) {
+    sleep(50);
+    step = steps.next();
+  }
+  const owner = step.value;
+  try {
+    const result = fn();
+    if (result && typeof result.then === "function") {
+      return (async () => {
+        try {
+          return await result;
+        } finally {
+          release(lockPath2, owner);
+        }
+      })();
+    }
+    release(lockPath2, owner);
+    return result;
+  } catch (e) {
+    release(lockPath2, owner);
+    throw e;
+  }
+}
+async function acquireAsyncCrossProcessLock(path2, signal) {
+  const steps = acquireSteps(path2);
+  try {
+    for (; ; ) {
+      signal?.throwIfAborted();
+      const step = steps.next();
+      if (step.done) {
+        const owner = step.value;
+        return () => release(path2, owner);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  } finally {
+    steps.return("");
+  }
+}
+async function withAsyncCrossProcessLock(path2, fn, signal) {
+  const release2 = await acquireAsyncCrossProcessLock(path2, signal);
+  try {
+    signal?.throwIfAborted();
+    return await fn();
+  } finally {
+    release2();
+  }
+}
+
+// src/session.ts
+var root = join2(homedir(), ".pirate-radio");
+var directory;
+var scopeKey = "";
+var boundSession;
+var pi;
+function hostProcess() {
+  if (pi === void 0) pi = findPiProcess();
+  return pi;
+}
+function dataDir() {
+  if (directory) return directory;
+  const explicit = process.env.PIRATE_RADIO_SESSION?.trim();
+  const host = explicit ? null : hostProcess();
+  const key = explicit || (host ? `pi:${host.pid}:${host.token ?? ""}` : "");
+  scopeKey = key;
+  directory = key ? join2(root, "sessions", createHash("sha256").update(key).digest("hex").slice(0, 24)) : root;
+  return directory;
+}
+function readAnchor() {
+  try {
+    const a = JSON.parse(readFileSync3(join2(dataDir(), "anchor.json"), "utf8"));
+    if (Number.isInteger(a?.pid) && a.pid > 0 && (a.token == null || typeof a.token === "string")) {
+      return { pid: a.pid, token: a.token ?? null, sessionId: typeof a.sessionId === "string" ? a.sessionId : void 0 };
+    }
+  } catch {
+  }
+  return null;
+}
+function anchorAlive(anchor) {
+  return !!anchor && sameProcess(anchor.pid, anchor.token);
+}
+function sessionId() {
+  return boundSession ??= readAnchor()?.sessionId ?? "legacy";
+}
+function playerMarker(id = sessionId()) {
+  return `pirate-radio-${createHash("sha256").update(`${dataDir()}:${id}`).digest("hex").slice(0, 24)}`;
+}
+function sessionEnvironment() {
+  dataDir();
+  return { ...process.env, PIRATE_RADIO_SESSION: scopeKey };
+}
 
 // src/registry.ts
-var dir = join2(homedir(), ".pirate-radio");
-var regPath = join2(dir, "players.json");
-var lockPath = join2(dir, "players.lock");
+import {
+  readFileSync as readFileSync4,
+  writeFileSync as writeFileSync3,
+  renameSync as renameSync3,
+  mkdirSync as mkdirSync3,
+  existsSync as existsSync2
+} from "node:fs";
+import { join as join3 } from "node:path";
+var dir = dataDir();
+var regPath = join3(dir, "players.json");
+var lockPath = join3(dir, "players.lock");
 function readRaw() {
   if (!existsSync2(regPath)) return { players: [], watchdogs: [] };
   try {
-    const r = JSON.parse(readFileSync3(regPath, "utf8"));
+    const r = JSON.parse(readFileSync4(regPath, "utf8"));
     return { players: r.players ?? [], watchdogs: r.watchdogs ?? [] };
   } catch {
     return { players: [], watchdogs: [] };
   }
 }
 function writeRaw(r) {
-  mkdirSync2(dir, { recursive: true });
+  mkdirSync3(dir, { recursive: true });
   const tmp = `${regPath}.${process.pid}.tmp`;
-  writeFileSync2(tmp, JSON.stringify(r, null, 2));
-  renameSync2(tmp, regPath);
+  writeFileSync3(tmp, JSON.stringify(r, null, 2));
+  renameSync3(tmp, regPath);
 }
 function withLock(fn) {
   return withCrossProcessLock(lockPath, () => {
@@ -336,23 +508,29 @@ function withLock(fn) {
     return result;
   });
 }
-function addPlayer(pid, host) {
+function addPlayer(pid, host, metadata = {}) {
   const token = procStartToken(pid);
   withLock((r) => {
     r.players = prune(r.players);
-    r.players.push({ pid, token, host });
+    r.players.push({ ...metadata, pid, token, host, sessionId: sessionId() });
   });
 }
 function addWatchdog(pid) {
   const token = procStartToken(pid);
   withLock((r) => {
     r.watchdogs = prune(r.watchdogs);
-    r.watchdogs.push({ pid, token });
+    r.watchdogs.push({ pid, token, sessionId: sessionId() });
+  });
+}
+function livePlayers(id = sessionId()) {
+  return withLock((r) => {
+    r.players = prune(r.players);
+    return r.players.filter((e) => owned(e, id));
   });
 }
 function livePlayerCountUnlocked() {
   try {
-    return prune(readRaw().players).length;
+    return prune(readRaw().players).filter((e) => owned(e)).length;
   } catch {
     return 0;
   }
@@ -367,250 +545,67 @@ function removeWatchdog(pid) {
     r.watchdogs = r.watchdogs.filter((e) => e.pid !== pid);
   });
 }
-function drainPlayers() {
-  return withLock((r) => {
-    const live = prune(r.players);
-    r.players = [];
-    return live;
-  });
+function owned(entry, id = sessionId()) {
+  return (entry.sessionId ?? "legacy") === id;
 }
-function drainWatchdogs() {
+function drainAll(id = sessionId()) {
   return withLock((r) => {
-    const live = prune(r.watchdogs);
-    r.watchdogs = [];
-    return live;
+    const players = prune(r.players.filter((e) => owned(e, id)));
+    const watchdogs = prune(r.watchdogs.filter((e) => owned(e, id)));
+    r.players = r.players.filter((e) => !owned(e, id));
+    r.watchdogs = r.watchdogs.filter((e) => !owned(e, id));
+    return { players, watchdogs };
   });
 }
 function prune(list2) {
   return list2.filter((e) => sameProcess(e.pid, e.token));
 }
 
-// src/state.ts
-var stateDir = join3(homedir2(), ".pirate-radio");
-var stateFilePath = join3(stateDir, "state.json");
-var stateLockPath = join3(stateDir, "state.lock");
-var anchorPath = join3(stateDir, "anchor.json");
-var defaults = {
-  state: "stopped",
-  source: null,
-  genre: null,
-  stationName: null,
-  stationIndex: 0,
-  title: null,
-  volume: 80,
-  spotifyVerifier: null,
-  podcastFeed: null,
-  podcastName: null,
-  episodeIndex: 0
-};
-var now = { ...defaults };
-var inProcTail = Promise.resolve();
-async function withState(fn) {
-  const run = () => withCrossProcessLock(stateLockPath, async () => {
-    loadStateUnlocked();
-    try {
-      const out = await fn();
-      saveStateUnlocked();
-      return out;
-    } catch (e) {
-      saveStateUnlocked();
-      throw e;
-    }
-  });
-  const p = inProcTail.then(run, run);
-  inProcTail = p.catch(() => {
-  });
-  return p;
-}
-var fieldType = {
-  state: "string",
-  source: "string",
-  genre: "string",
-  stationName: "string",
-  stationIndex: "number",
-  title: "string",
-  volume: "number",
-  spotifyVerifier: "string",
-  podcastFeed: "string",
-  podcastName: "string",
-  episodeIndex: "number"
-};
-function loadStateUnlocked() {
-  if (!existsSync3(stateFilePath)) {
-    Object.assign(now, defaults);
-    return;
-  }
-  let raw = {};
-  try {
-    raw = JSON.parse(readFileSync4(stateFilePath, "utf8"));
-  } catch {
-    process.stderr.write("radiohead: state.json unreadable, resetting to defaults\n");
-    Object.assign(now, defaults);
-    return;
-  }
-  const target = now;
-  for (const key of Object.keys(defaults)) {
-    const got = raw[key];
-    if (got === null && defaults[key] === null || typeof got === fieldType[key]) target[key] = got;
-    else target[key] = defaults[key];
-  }
-}
-function saveStateUnlocked() {
-  mkdirSync3(stateDir, { recursive: true });
-  const tmp = `${stateFilePath}.${process.pid}.tmp`;
-  writeFileSync3(tmp, JSON.stringify(now, null, 2));
-  renameSync3(tmp, stateFilePath);
-}
-function readAnchor() {
-  if (!existsSync3(anchorPath)) return null;
-  try {
-    const a = JSON.parse(readFileSync4(anchorPath, "utf8"));
-    if (typeof a.pid === "number" && a.pid > 0) {
-      return { pid: a.pid, token: a.token ?? null };
-    }
-  } catch {
-  }
-  return null;
-}
-function anchorAlive(anchor) {
-  if (!anchor) return false;
-  return sameProcess(anchor.pid, anchor.token);
-}
-function describe() {
-  if (now.state === "stopped" || !now.source) return "Stopped.";
-  const localSource = now.source === "radio" || now.source === "podcast" || now.source === "hoer";
-  if (localSource && now.state === "playing" && livePlayerCountUnlocked() === 0) {
-    return "Stopped (player exited unexpectedly).";
-  }
-  const what = now.source === "radio" ? `${now.genre} radio \u2014 ${now.stationName}` : now.source === "podcast" ? `Podcast ${now.podcastName ?? "(unknown)"} \u2014 ${now.title ?? "(unknown)"}` : now.source === "hoer" ? `H\xD6R Berlin \u2014 ${now.title ?? "(unknown)"}` : now.source === "applemusic" ? `Apple Music \u2014 ${now.title ?? "(unknown)"}` : `Spotify \u2014 ${now.title ?? "(unknown)"}`;
-  return `${now.state === "paused" ? "Paused" : "Playing"}: ${what} (vol ${now.volume})`;
-}
-
-// src/dynhosts.ts
-import { readFileSync as readFileSync6, writeFileSync as writeFileSync4, renameSync as renameSync4, mkdirSync as mkdirSync4, existsSync as existsSync4 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import { join as join5 } from "node:path";
-
-// src/stations.ts
-import { readFileSync as readFileSync5 } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname as dirname2, join as join4 } from "node:path";
-var here = dirname2(fileURLToPath(import.meta.url));
-var emptyCatalog = { version: 2, aliases: {}, genres: {} };
-var catalog = emptyCatalog;
-try {
-  const raw = JSON.parse(readFileSync5(join4(here, "..", "data", "stations.json"), "utf8"));
-  catalog = validateCatalog(raw);
-} catch (e) {
-  process.stderr.write(`radiohead: failed to load stations.json \u2014 ${e.message}
-`);
-}
-function nonEmpty(value) {
-  return typeof value === "string" && value.trim().length > 0;
-}
-function validateCatalog(value) {
-  if (!value || typeof value !== "object") throw new Error("catalog must be an object");
-  const raw = value;
-  if (raw.version !== 2) throw new Error(`unsupported catalog version: ${String(raw.version)}`);
-  if (!raw.aliases || typeof raw.aliases !== "object" || Array.isArray(raw.aliases))
-    throw new Error("aliases must be an object");
-  if (!raw.genres || typeof raw.genres !== "object" || Array.isArray(raw.genres))
-    throw new Error("genres must be an object");
-  const genres3 = {};
-  const seenUrls = /* @__PURE__ */ new Set();
-  for (const [id, candidate] of Object.entries(raw.genres)) {
-    if (!/^[a-z0-9-]+$/.test(id)) throw new Error(`invalid genre id: ${id}`);
-    if (!candidate || typeof candidate !== "object") throw new Error(`${id}: genre must be an object`);
-    const genre = candidate;
-    if (!nonEmpty(genre.label)) throw new Error(`${id}: label is required`);
-    if (!nonEmpty(genre.description)) throw new Error(`${id}: description is required`);
-    if (!Array.isArray(genre.stations) || genre.stations.length === 0)
-      throw new Error(`${id}: stations must be a non-empty array`);
-    const stations2 = genre.stations.map((candidateStation, index) => {
-      if (!candidateStation || typeof candidateStation !== "object")
-        throw new Error(`${id}[${index}]: station must be an object`);
-      const station = candidateStation;
-      if (!nonEmpty(station.name)) throw new Error(`${id}[${index}]: name is required`);
-      if (!nonEmpty(station.url)) throw new Error(`${id}[${index}]: url is required`);
-      let parsed;
-      try {
-        parsed = new URL(station.url);
-      } catch {
-        throw new Error(`${id}[${index}]: invalid URL`);
+// src/ipc.ts
+import { createConnection } from "node:net";
+import { randomInt } from "node:crypto";
+async function mpvCommand(path2, command, timeoutMs = 1500, signal = operationSignal()) {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const id = randomInt(1, 2147483647);
+    const socket = createConnection(path2);
+    let buffer = "", settled = false;
+    const finish = (error, data) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      socket.destroy();
+      if (error) reject(error);
+      else resolve(data);
+    };
+    const abort = () => finish(new Error("Player control cancelled"));
+    const timer = setTimeout(() => finish(new Error("mpv IPC timed out")), timeoutMs);
+    signal?.addEventListener("abort", abort, { once: true });
+    socket.setEncoding("utf8");
+    socket.on("connect", () => socket.write(JSON.stringify({ command, request_id: id }) + "\n"));
+    socket.on("error", (e) => finish(e));
+    socket.on("close", () => finish(new Error("mpv IPC disconnected before acknowledgement")));
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      if (buffer.length > 1024 * 1024) {
+        finish(new Error("mpv IPC response too large"));
+        return;
       }
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
-        throw new Error(`${id}[${index}]: URL must be HTTP(S)`);
-      if (seenUrls.has(station.url)) throw new Error(`${id}[${index}]: duplicate URL ${station.url}`);
-      seenUrls.add(station.url);
-      return { name: station.name, url: station.url };
+      let end;
+      while ((end = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, end);
+        buffer = buffer.slice(end + 1);
+        try {
+          const message = JSON.parse(line);
+          if (message.request_id !== id) continue;
+          finish(message.error === "success" ? void 0 : new Error(`mpv: ${message.error ?? "invalid response"}`), message.data);
+        } catch {
+          finish(new Error("Malformed mpv IPC response"));
+        }
+      }
     });
-    genres3[id] = { label: genre.label, description: genre.description, stations: stations2 };
-  }
-  const aliases = {};
-  for (const [alias, target] of Object.entries(raw.aliases)) {
-    if (!/^[a-z0-9-]+$/.test(alias) || !nonEmpty(target)) throw new Error(`invalid alias: ${alias}`);
-    if (genres3[alias]) throw new Error(`alias conflicts with genre: ${alias}`);
-    if (!genres3[target]) throw new Error(`alias ${alias} targets unknown genre ${target}`);
-    aliases[alias] = target;
-  }
-  return { version: 2, aliases, genres: genres3 };
-}
-function all() {
-  return Object.fromEntries(Object.entries(catalog.genres).map(([id, genre]) => [id, genre.stations]));
-}
-function genres() {
-  return Object.keys(catalog.genres);
-}
-function acceptedGenres() {
-  return [...genres(), ...Object.keys(catalog.aliases)];
-}
-function resolveGenre(input) {
-  const id = input.trim().toLowerCase();
-  if (catalog.genres[id]) return id;
-  return catalog.aliases[id] ?? null;
-}
-function genreInfo(id) {
-  const resolved = resolveGenre(id);
-  return resolved ? catalog.genres[resolved] : null;
-}
-var hostCache = null;
-function hosts() {
-  if (hostCache) return hostCache;
-  const set = /* @__PURE__ */ new Set();
-  for (const genre of Object.values(catalog.genres)) {
-    for (const station of genre.stations) set.add(new URL(station.url).host.toLowerCase());
-  }
-  hostCache = [...set];
-  return hostCache;
-}
-
-// src/dynhosts.ts
-var dir2 = join5(homedir3(), ".pirate-radio");
-var path = join5(dir2, "dynamic-hosts.json");
-var CAP = 20;
-function dynamicHosts() {
-  if (!existsSync4(path)) return [];
-  try {
-    const arr = JSON.parse(readFileSync6(path, "utf8"));
-    return Array.isArray(arr) ? arr.filter((h) => typeof h === "string") : [];
-  } catch {
-    return [];
-  }
-}
-function sweepHosts() {
-  return lifecycleTestMode ? dynamicHosts() : [...hosts(), ...dynamicHosts()];
-}
-function rememberHost(host) {
-  const h = host.toLowerCase();
-  if (!h) return;
-  try {
-    const next4 = [h, ...dynamicHosts().filter((x) => x !== h)].slice(0, CAP);
-    mkdirSync4(dir2, { recursive: true });
-    const tmp = `${path}.${process.pid}.tmp`;
-    writeFileSync4(tmp, JSON.stringify(next4, null, 2));
-    renameSync4(tmp, path);
-  } catch {
-  }
+  });
 }
 
 // src/player.ts
@@ -638,33 +633,106 @@ function playerAvailable() {
 function installHint() {
   return "No audio player found. Install mpv (recommended) or ffmpeg:\n  macOS:   brew install mpv\n  Windows: winget install mpv   (or scoop install mpv)\n  Linux:   sudo apt install mpv  (or your package manager)";
 }
-function stop() {
-  for (const p of drainPlayers()) killPid(p.pid);
-  for (const w of drainWatchdogs()) killPid(w.pid);
-  sweepOrphans();
+function stop(id = sessionId()) {
+  const { players, watchdogs } = drainAll(id);
+  for (const p of players) {
+    killSameProcess(p.pid, p.token);
+    if (p.ipc && process.platform !== "win32") {
+      try {
+        rmSync2(p.ipc, { force: true });
+      } catch {
+      }
+    }
+  }
+  for (const w of watchdogs) if (w.pid !== process.pid) killSameProcess(w.pid, w.token);
+  for (const pid of findOrphanPlayers(playerMarker(id))) killPid(pid);
 }
-function sweepOrphans() {
-  for (const pid of findOrphanPlayers(sweepHosts())) killPid(pid);
+var here = dirname2(fileURLToPath(import.meta.url));
+function ipcPath() {
+  const id = randomUUID3();
+  if (process.platform === "win32") return `\\\\.\\pipe\\pirate-radio-${id}`;
+  const dir3 = join4(tmpdir(), `pr-${process.getuid?.() ?? "user"}`);
+  mkdirSync4(dir3, { recursive: true, mode: 448 });
+  return join4(dir3, `${id}.sock`);
 }
-var here2 = dirname3(fileURLToPath2(import.meta.url));
-function play(url, volume) {
+async function play(url, volume) {
+  checkCancelled();
   const player = detect();
   if (!player) throw new Error(installHint());
   stop();
-  const args = player === "mpv" ? ["--no-video", "--really-quiet", `--volume=${volume}`, url] : ["-nodisp", "-autoexit", "-loglevel", "quiet", "-volume", String(volume), url];
+  const marker = playerMarker();
+  const ipc = player === "mpv" ? ipcPath() : void 0;
+  const args = player === "mpv" ? ["--no-config", "--no-video", "--really-quiet", `--title=${marker}`, `--input-ipc-server=${ipc}`, `--volume=${volume}`, "--", url] : ["-nodisp", "-autoexit", "-loglevel", "quiet", "-window_title", marker, "-volume", String(volume), "-i", url];
   const child = spawn(player, args, { stdio: "ignore", detached: true, windowsHide: true });
-  child.unref();
   const pid = child.pid;
-  if (pid) {
+  let error;
+  child.on("error", (e) => {
+    error = e;
+  });
+  try {
+    await new Promise((resolve, reject) => {
+      child.once("spawn", resolve);
+      child.once("error", reject);
+    });
+    if (!pid) throw new Error("Audio player did not start");
     let host;
     try {
       host = new URL(url).host;
     } catch {
     }
-    addPlayer(pid, host);
-    child.on("error", () => removePlayer(pid));
-    child.on("exit", () => removePlayer(pid));
+    addPlayer(pid, host, { ipc, player });
+    child.on("exit", () => {
+      try {
+        removePlayer(pid);
+      } catch {
+      }
+    });
+    if (ipc) {
+      const deadline = Date.now() + 4e3;
+      for (; ; ) {
+        checkCancelled();
+        if (error || child.exitCode !== null) throw error ?? new Error("mpv exited during startup");
+        try {
+          await mpvCommand(ipc, ["get_property", "pid"], 500);
+          break;
+        } catch (e) {
+          if (Date.now() >= deadline) throw e;
+          await wait(50);
+        }
+      }
+    }
     spawnWatchdog(pid);
+    child.unref();
+  } catch (e) {
+    if (pid) {
+      killPid(pid);
+      removePlayer(pid);
+    }
+    if (ipc && process.platform !== "win32") {
+      try {
+        rmSync2(ipc, { force: true });
+      } catch {
+      }
+    }
+    throw e;
+  }
+}
+async function setPaused(paused) {
+  const players = livePlayers();
+  if (!players.length) return false;
+  if (players.some((p) => !p.ipc)) throw new Error("Pause/resume without restarting requires mpv. Use radio_stop or install mpv.");
+  for (const p of players) {
+    if (!sameProcess(p.pid, p.token)) throw new Error("Player exited");
+    await mpvCommand(p.ipc, ["set_property", "pause", paused]);
+  }
+  return true;
+}
+async function setVolume(volume) {
+  const players = livePlayers();
+  if (players.some((p) => !p.ipc)) throw new Error("Live volume control requires mpv; ffplay is not restarted automatically.");
+  for (const p of players) {
+    if (!sameProcess(p.pid, p.token)) throw new Error("Player exited");
+    await mpvCommand(p.ipc, ["set_property", "volume", volume]);
   }
 }
 function spawnWatchdog(playerPid) {
@@ -673,41 +741,205 @@ function spawnWatchdog(playerPid) {
     spawnWatchdogProc("file", anchor.pid, anchor.token, playerPid);
     return;
   }
-  const host = findPiProcess();
+  const host = hostProcess();
   if (host) spawnWatchdogProc("pid", host.pid, host.token, playerPid);
 }
-function spawnWatchdogProc(kind, anchorPid, anchorToken, playerPid) {
+function spawnWatchdogProc(kind, anchorPid, token, playerPid) {
   const wd = spawn(
     process.execPath,
-    [
-      join6(here2, "watchdog.js"),
-      String(anchorPid),
-      anchorToken ?? "",
-      String(playerPid),
-      kind
-    ],
-    { stdio: "ignore", detached: true, windowsHide: true }
+    [join4(here, "watchdog.js"), String(anchorPid), token ?? "", String(playerPid), kind, sessionId(), procStartToken(playerPid) ?? ""],
+    { stdio: "ignore", detached: true, windowsHide: true, env: sessionEnvironment() }
   );
-  wd.unref();
-  const pid = wd.pid;
-  if (pid) {
-    addWatchdog(pid);
-    wd.on("error", () => removeWatchdog(pid));
-    wd.on("exit", () => removeWatchdog(pid));
+  wd.on("error", () => {
+    if (wd.pid) {
+      try {
+        removeWatchdog(wd.pid);
+      } catch {
+      }
+    }
+  });
+  if (wd.pid) {
+    addWatchdog(wd.pid);
+    wd.on("exit", () => {
+      try {
+        removeWatchdog(wd.pid);
+      } catch {
+      }
+    });
   }
+  wd.unref();
 }
 
 // src/sources/spotify.ts
-import { readFileSync as readFileSync7, writeFileSync as writeFileSync5, mkdirSync as mkdirSync5, existsSync as existsSync5 } from "node:fs";
-import { homedir as homedir4 } from "node:os";
-import { join as join7 } from "node:path";
-import { createHash, randomBytes } from "node:crypto";
+import { readFileSync as readFileSync6, writeFileSync as writeFileSync5, mkdirSync as mkdirSync6, existsSync as existsSync4, renameSync as renameSync5 } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { join as join6 } from "node:path";
+import { createHash as createHash2, randomBytes } from "node:crypto";
+
+// src/state.ts
+import { readFileSync as readFileSync5, writeFileSync as writeFileSync4, renameSync as renameSync4, mkdirSync as mkdirSync5, existsSync as existsSync3 } from "node:fs";
+import { join as join5 } from "node:path";
+import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
+var stateDir = dataDir();
+var stateFilePath = join5(stateDir, "state.json");
+var stateLockPath = join5(stateDir, "state.lock");
+var defaults = {
+  revision: 0,
+  state: "stopped",
+  source: null,
+  genre: null,
+  stationName: null,
+  stationIndex: 0,
+  title: null,
+  volume: 80,
+  spotifyVerifier: null,
+  podcastFeed: null,
+  podcastName: null,
+  episodeIndex: 0
+};
+var transactions = new AsyncLocalStorage2();
+var fallback = { ...defaults };
+var now = new Proxy(fallback, {
+  get: (target, key) => Reflect.get(transactions.getStore()?.draft ?? target, key),
+  set: (target, key, value) => Reflect.set(transactions.getStore()?.draft ?? target, key, value),
+  ownKeys: () => Reflect.ownKeys(defaults),
+  getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true })
+});
+function snapshot() {
+  return transactions.run(void 0, () => {
+    loadStateUnlocked();
+    return { ...fallback };
+  });
+}
+function ensureCurrent(tx, current) {
+  const anchor = readAnchor();
+  if (!tx.release && tx.revision !== void 0 && current.revision !== tx.revision || tx.session !== "legacy" && anchor?.sessionId !== tx.session || anchor?.sessionId && anchor.sessionId !== tx.session) {
+    throw new Error("Playback request superseded by a newer command or session");
+  }
+}
+async function withState(fn, mutation = false) {
+  const base = withCrossProcessLock(stateLockPath, () => {
+    const state = snapshot();
+    if (mutation) {
+      state.revision++;
+      writeSnapshot(state);
+    }
+    return state;
+  });
+  const tx = { base, draft: { ...base }, revision: mutation ? base.revision : void 0, session: sessionId() };
+  return transactions.run(tx, async () => {
+    try {
+      const out = await fn();
+      if (!tx.release) checkCancelled();
+      withCrossProcessLock(stateLockPath, () => {
+        const latest = snapshot();
+        ensureCurrent(tx, latest);
+        for (const key of Object.keys(defaults)) {
+          if (key === "revision" || tx.draft[key] === tx.base[key]) continue;
+          if (latest[key] !== tx.base[key]) throw new Error(`Concurrent state update: ${key}`);
+          latest[key] = tx.draft[key];
+        }
+        writeSnapshot(latest);
+      });
+      return out;
+    } finally {
+      tx.release?.();
+    }
+  });
+}
+async function playbackEffect(fn) {
+  checkCancelled();
+  const tx = transactions.getStore();
+  if (tx?.release) return await fn();
+  const releaseSession = await acquireAsyncCrossProcessLock(join5(stateDir, "session.lock"), operationSignal());
+  let releasePlayback;
+  const release2 = () => {
+    releasePlayback?.();
+    releaseSession();
+  };
+  try {
+    releasePlayback = await acquireAsyncCrossProcessLock(join5(stateDir, "playback.lock"), operationSignal());
+  } catch (e) {
+    releaseSession();
+    throw e;
+  }
+  try {
+    checkCancelled();
+    if (tx) withCrossProcessLock(stateLockPath, () => {
+      const current = snapshot();
+      ensureCurrent(tx, current);
+      const draft = { ...current };
+      for (const key of Object.keys(defaults)) {
+        if (key !== "revision" && tx.draft[key] !== tx.base[key])
+          draft[key] = tx.draft[key];
+      }
+      tx.base = current;
+      tx.draft = draft;
+      tx.release = release2;
+    });
+    return await fn();
+  } finally {
+    if (!tx?.release) release2();
+  }
+}
+var fieldType = {
+  revision: "number",
+  state: "string",
+  source: "string",
+  genre: "string",
+  stationName: "string",
+  stationIndex: "number",
+  title: "string",
+  volume: "number",
+  spotifyVerifier: "string",
+  podcastFeed: "string",
+  podcastName: "string",
+  episodeIndex: "number"
+};
+function loadStateUnlocked() {
+  if (!existsSync3(stateFilePath)) {
+    Object.assign(now, defaults);
+    return;
+  }
+  let raw = {};
+  try {
+    raw = JSON.parse(readFileSync5(stateFilePath, "utf8"));
+  } catch {
+    process.stderr.write("radiohead: state.json unreadable, resetting to defaults\n");
+    Object.assign(now, defaults);
+    return;
+  }
+  const target = now;
+  for (const key of Object.keys(defaults)) {
+    const got = raw?.[key];
+    if (got === null && defaults[key] === null || typeof got === fieldType[key]) target[key] = got;
+    else target[key] = defaults[key];
+  }
+  if (!Number.isSafeInteger(now.revision) || now.revision < 0) now.revision = 0;
+}
+function writeSnapshot(value) {
+  mkdirSync5(stateDir, { recursive: true });
+  const tmp = `${stateFilePath}.${process.pid}.tmp`;
+  writeFileSync4(tmp, JSON.stringify(value, null, 2));
+  renameSync4(tmp, stateFilePath);
+}
+function describe() {
+  if (now.state === "stopped" || !now.source) return "Stopped.";
+  const localSource = now.source === "radio" || now.source === "podcast" || now.source === "hoer";
+  if (localSource && now.state === "playing" && livePlayerCountUnlocked() === 0) {
+    return "Stopped (player exited unexpectedly).";
+  }
+  const what = now.source === "radio" ? `${now.genre} radio \u2014 ${now.stationName}` : now.source === "podcast" ? `Podcast ${now.podcastName ?? "(unknown)"} \u2014 ${now.title ?? "(unknown)"}` : now.source === "hoer" ? `H\xD6R Berlin \u2014 ${now.title ?? "(unknown)"}` : now.source === "applemusic" ? `Apple Music \u2014 ${now.title ?? "(unknown)"}` : `Spotify \u2014 ${now.title ?? "(unknown)"}`;
+  return `${now.state === "paused" ? "Paused" : "Playing"}: ${what} (vol ${now.volume})`;
+}
+
+// src/sources/spotify.ts
 var API = "https://api.spotify.com/v1";
 var AUTH = "https://accounts.spotify.com";
 var REDIRECT = "http://127.0.0.1:8888/callback";
 var SCOPES = "user-read-playback-state user-modify-playback-state playlist-read-private";
-var cfgDir = join7(homedir4(), ".pirate-radio");
-var tokenPath = join7(cfgDir, "spotify.json");
+var cfgDir = join6(homedir2(), ".pirate-radio");
+var tokenPath = join6(cfgDir, "spotify.json");
 function clientId() {
   const id = process.env.SPOTIFY_CLIENT_ID;
   if (!id) throw new Error("Set SPOTIFY_CLIENT_ID (from your Spotify developer app) to use Spotify.");
@@ -717,20 +949,22 @@ function b64url(buf) {
   return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 function loadTokens() {
-  if (!existsSync5(tokenPath)) return null;
+  if (!existsSync4(tokenPath)) return null;
   try {
-    return JSON.parse(readFileSync7(tokenPath, "utf8"));
+    return JSON.parse(readFileSync6(tokenPath, "utf8"));
   } catch {
     return null;
   }
 }
 function saveTokens(t) {
-  mkdirSync5(cfgDir, { recursive: true });
-  writeFileSync5(tokenPath, JSON.stringify(t, null, 2), { mode: 384 });
+  mkdirSync6(cfgDir, { recursive: true });
+  const tmp = `${tokenPath}.${process.pid}.tmp`;
+  writeFileSync5(tmp, JSON.stringify(t, null, 2), { mode: 384 });
+  renameSync5(tmp, tokenPath);
 }
 function loginUrl() {
   const v = b64url(randomBytes(48));
-  const challenge = b64url(createHash("sha256").update(v).digest());
+  const challenge = b64url(createHash2("sha256").update(v).digest());
   now.spotifyVerifier = v;
   const p = new URLSearchParams({
     client_id: clientId(),
@@ -752,7 +986,7 @@ async function complete(code) {
     client_id: clientId(),
     code_verifier: v
   });
-  const r = await fetch(`${AUTH}/api/token`, {
+  const r = await request(`${AUTH}/api/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body
@@ -765,40 +999,31 @@ async function complete(code) {
   saveTokens({ access_token: j.access_token, refresh_token: j.refresh_token, expires_at: Date.now() + ttl * 1e3 });
   now.spotifyVerifier = null;
 }
-var refreshInFlight = null;
 async function accessToken() {
-  const t = loadTokens();
-  if (!t) throw new Error("Not logged in to Spotify. Run spotify_login.");
-  if (Date.now() < t.expires_at - 3e4) return t.access_token;
-  if (refreshInFlight) return refreshInFlight;
-  refreshInFlight = (async () => {
-    try {
-      const body = new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: t.refresh_token,
-        client_id: clientId()
-      });
-      const r = await fetch(`${AUTH}/api/token`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body
-      });
-      if (!r.ok) throw new Error(`Token refresh failed: ${await r.text()}`);
-      const j = await r.json();
-      if (!j.access_token) throw new Error("Token refresh returned no access token \u2014 run spotify_login again.");
-      const ttl = Number(j.expires_in) || 3600;
-      const next4 = { access_token: j.access_token, refresh_token: j.refresh_token ?? t.refresh_token, expires_at: Date.now() + ttl * 1e3 };
-      saveTokens(next4);
-      return next4.access_token;
-    } finally {
-      refreshInFlight = null;
-    }
-  })();
-  return refreshInFlight;
+  const cached = loadTokens();
+  if (!cached) throw new Error("Not logged in to Spotify. Run spotify_login.");
+  if (Date.now() < cached.expires_at - 3e4) return cached.access_token;
+  return withAsyncCrossProcessLock(join6(cfgDir, "spotify.lock"), async () => {
+    const t = loadTokens();
+    if (!t) throw new Error("Not logged in to Spotify. Run spotify_login.");
+    if (Date.now() < t.expires_at - 3e4) return t.access_token;
+    const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token: t.refresh_token, client_id: clientId() });
+    const r = await request(`${AUTH}/api/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body
+    });
+    if (!r.ok) throw new Error(`Token refresh failed (${r.status}); run spotify_login again.`);
+    const j = await r.json();
+    if (!j.access_token) throw new Error("Token refresh returned no access token \u2014 run spotify_login again.");
+    const ttl = Number(j.expires_in) || 3600;
+    saveTokens({ access_token: j.access_token, refresh_token: j.refresh_token ?? t.refresh_token, expires_at: Date.now() + ttl * 1e3 });
+    return j.access_token;
+  }, operationSignal());
 }
 async function api(path2, init) {
   const tok = await accessToken();
-  const r = await fetch(`${API}${path2}`, {
+  const r = await request(`${API}${path2}`, {
     ...init,
     headers: { ...init?.headers ?? {}, Authorization: `Bearer ${tok}` }
   });
@@ -914,8 +1139,10 @@ async function playContext(uriOrName) {
       displayName = best.name;
     }
   }
-  await playWithRecovery(playBody(uri));
-  stop();
+  await playbackEffect(async () => {
+    await playWithRecovery(playBody(uri));
+    stop();
+  });
   now.state = "playing";
   now.source = "spotify";
   now.title = displayName;
@@ -938,18 +1165,19 @@ async function playWithRecovery(body) {
 }
 async function launchAndWaitForDevice() {
   try {
-    const { execFileSync: execFileSync6 } = await import("node:child_process");
-    execFileSync6("open", ["-a", "Spotify"], { stdio: "ignore", timeout: 8e3 });
+    const { execFileSync: execFileSync5 } = await import("node:child_process");
+    execFileSync5("open", ["-a", "Spotify"], { stdio: "ignore", timeout: 8e3 });
   } catch {
     return null;
   }
   for (let i = 0; i < 6; i++) {
-    await new Promise((res) => setTimeout(res, 2e3));
+    await wait(2e3);
     try {
       const ds = await deviceList();
       const d = ds.find((x) => x.type.toLowerCase() === "computer") ?? ds[0];
       if (d) return d.id;
     } catch {
+      checkCancelled();
     }
   }
   return null;
@@ -966,7 +1194,7 @@ async function skipNext() {
 async function skipPrev() {
   await api("/me/player/previous", { method: "POST" });
 }
-async function setVolume(percent) {
+async function setVolume2(percent) {
   const p = Math.max(0, Math.min(100, Math.round(percent)));
   await api(`/me/player/volume?volume_percent=${p}`, { method: "PUT" });
 }
@@ -991,40 +1219,42 @@ async function play2(target) {
   assertMac();
   const t = escapeAS(target.trim());
   if (!t) throw new Error("Give me a playlist, song, or album name from your Music library.");
-  stop();
-  if (now.source === "spotify") {
+  return playbackEffect(async () => {
+    stop();
+    if (now.source === "spotify") {
+      try {
+        await pause();
+      } catch {
+      }
+    }
+    const attempts = [
+      { script: `tell application "Music" to play playlist "${t}"`, kind: "playlist" },
+      { script: `tell application "Music" to play (first track of library playlist 1 whose name contains "${t}")`, kind: "track" },
+      { script: `tell application "Music" to play (first track of library playlist 1 whose album contains "${t}")`, kind: "album" }
+    ];
+    let played = null;
+    for (const a of attempts) {
+      try {
+        osa(a.script);
+        played = a.kind;
+        break;
+      } catch {
+      }
+    }
+    if (!played)
+      throw new Error(
+        `Nothing in your Music library matches "${target}". AppleScript can only play what's already in the library \u2014 add it in Music.app first.`
+      );
+    let title = target;
     try {
-      await pause();
+      title = nowPlayingLine2();
     } catch {
     }
-  }
-  const attempts = [
-    { script: `tell application "Music" to play playlist "${t}"`, kind: "playlist" },
-    { script: `tell application "Music" to play (first track of library playlist 1 whose name contains "${t}")`, kind: "track" },
-    { script: `tell application "Music" to play (first track of library playlist 1 whose album contains "${t}")`, kind: "album" }
-  ];
-  let played = null;
-  for (const a of attempts) {
-    try {
-      osa(a.script);
-      played = a.kind;
-      break;
-    } catch {
-    }
-  }
-  if (!played)
-    throw new Error(
-      `Nothing in your Music library matches "${target}". AppleScript can only play what's already in the library \u2014 add it in Music.app first.`
-    );
-  let title = target;
-  try {
-    title = nowPlayingLine2();
-  } catch {
-  }
-  now.state = "playing";
-  now.source = "applemusic";
-  now.title = title;
-  return `> Apple Music (${played}): ${title}`;
+    now.state = "playing";
+    now.source = "applemusic";
+    now.title = title;
+    return `> Apple Music (${played}): ${title}`;
+  });
 }
 function pauseIfRunning() {
   if (process.platform !== "darwin") return;
@@ -1052,7 +1282,7 @@ function prev() {
   assertMac();
   osa(ifRunning("previous track"));
 }
-function setVolume2(percent) {
+function setVolume3(percent) {
   assertMac();
   const p = Math.max(0, Math.min(100, Math.round(percent)));
   osa(ifRunning(`set sound volume to ${p}`));
@@ -1070,6 +1300,99 @@ function nowPlayingLine2() {
   return out;
 }
 
+// src/stations.ts
+import { readFileSync as readFileSync7 } from "node:fs";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+import { dirname as dirname3, join as join7 } from "node:path";
+var here2 = dirname3(fileURLToPath2(import.meta.url));
+var emptyCatalog = { version: 2, aliases: {}, genres: {} };
+var catalog = emptyCatalog;
+try {
+  const raw = JSON.parse(readFileSync7(join7(here2, "..", "data", "stations.json"), "utf8"));
+  catalog = validateCatalog(raw);
+} catch (e) {
+  process.stderr.write(`radiohead: failed to load stations.json \u2014 ${e.message}
+`);
+}
+function nonEmpty(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+function validateCatalog(value) {
+  if (!value || typeof value !== "object") throw new Error("catalog must be an object");
+  const raw = value;
+  if (raw.version !== 2) throw new Error(`unsupported catalog version: ${String(raw.version)}`);
+  if (!raw.aliases || typeof raw.aliases !== "object" || Array.isArray(raw.aliases))
+    throw new Error("aliases must be an object");
+  if (!raw.genres || typeof raw.genres !== "object" || Array.isArray(raw.genres))
+    throw new Error("genres must be an object");
+  const genres3 = {};
+  const seenUrls = /* @__PURE__ */ new Set();
+  for (const [id, candidate] of Object.entries(raw.genres)) {
+    if (!/^[a-z0-9-]+$/.test(id)) throw new Error(`invalid genre id: ${id}`);
+    if (!candidate || typeof candidate !== "object") throw new Error(`${id}: genre must be an object`);
+    const genre = candidate;
+    if (!nonEmpty(genre.label)) throw new Error(`${id}: label is required`);
+    if (!nonEmpty(genre.description)) throw new Error(`${id}: description is required`);
+    if (!Array.isArray(genre.stations) || genre.stations.length === 0)
+      throw new Error(`${id}: stations must be a non-empty array`);
+    const stations2 = genre.stations.map((candidateStation, index) => {
+      if (!candidateStation || typeof candidateStation !== "object")
+        throw new Error(`${id}[${index}]: station must be an object`);
+      const station = candidateStation;
+      if (!nonEmpty(station.name)) throw new Error(`${id}[${index}]: name is required`);
+      if (!nonEmpty(station.url)) throw new Error(`${id}[${index}]: url is required`);
+      let parsed;
+      try {
+        parsed = new URL(station.url);
+      } catch {
+        throw new Error(`${id}[${index}]: invalid URL`);
+      }
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+        throw new Error(`${id}[${index}]: URL must be HTTP(S)`);
+      if (seenUrls.has(station.url)) throw new Error(`${id}[${index}]: duplicate URL ${station.url}`);
+      seenUrls.add(station.url);
+      return { name: station.name, url: station.url };
+    });
+    genres3[id] = { label: genre.label, description: genre.description, stations: stations2 };
+  }
+  const aliases = {};
+  for (const [alias, target] of Object.entries(raw.aliases)) {
+    if (!/^[a-z0-9-]+$/.test(alias) || !nonEmpty(target)) throw new Error(`invalid alias: ${alias}`);
+    if (genres3[alias]) throw new Error(`alias conflicts with genre: ${alias}`);
+    if (!genres3[target]) throw new Error(`alias ${alias} targets unknown genre ${target}`);
+    aliases[alias] = target;
+  }
+  return { version: 2, aliases, genres: genres3 };
+}
+function all() {
+  return Object.fromEntries(Object.entries(catalog.genres).map(([id, genre]) => [id, genre.stations]));
+}
+function genres() {
+  return Object.keys(catalog.genres);
+}
+function acceptedGenres() {
+  return [...genres(), ...Object.keys(catalog.aliases)];
+}
+function resolveGenre(input) {
+  const id = input.trim().toLowerCase();
+  if (catalog.genres[id]) return id;
+  return catalog.aliases[id] ?? null;
+}
+function genreInfo(id) {
+  const resolved = resolveGenre(id);
+  return resolved ? catalog.genres[resolved] : null;
+}
+var hostCache = null;
+function hosts() {
+  if (hostCache) return hostCache;
+  const set = /* @__PURE__ */ new Set();
+  for (const genre of Object.values(catalog.genres)) {
+    for (const station of genre.stations) set.add(new URL(station.url).host.toLowerCase());
+  }
+  hostCache = [...set];
+  return hostCache;
+}
+
 // src/sources/radio.ts
 var stations = all();
 function genres2() {
@@ -1084,17 +1407,19 @@ function list() {
 async function playGenre(genre, index = 0) {
   const g = resolveGenre(genre);
   if (!g) throw new Error(`Unknown genre "${genre}". Available: ${acceptedGenres().join(", ")}`);
-  if (now.source === "spotify") {
-    try {
-      await pause();
-    } catch {
-    }
-  }
-  if (now.source === "applemusic") pauseIfRunning();
   const len = stations[g].length;
   const i = (Math.trunc(index) % len + len) % len;
   const st = stations[g][i];
-  play(st.url, now.volume);
+  await playbackEffect(async () => {
+    if (now.source === "spotify") {
+      try {
+        await pause();
+      } catch {
+      }
+    }
+    if (now.source === "applemusic") pauseIfRunning();
+    await play(st.url, now.volume);
+  });
   now.state = "playing";
   now.source = "radio";
   now.genre = g;
@@ -1114,6 +1439,34 @@ async function prev2() {
   if (!genre) throw new Error(`Unknown saved genre "${now.genre}".`);
   const len = stations[genre].length;
   return playGenre(genre, (now.stationIndex - 1 + len) % len);
+}
+
+// src/dynhosts.ts
+import { readFileSync as readFileSync8, writeFileSync as writeFileSync6, renameSync as renameSync6, mkdirSync as mkdirSync7, existsSync as existsSync5 } from "node:fs";
+import { join as join8 } from "node:path";
+var dir2 = dataDir();
+var path = join8(dir2, "dynamic-hosts.json");
+var CAP = 20;
+function dynamicHosts() {
+  if (!existsSync5(path)) return [];
+  try {
+    const arr = JSON.parse(readFileSync8(path, "utf8"));
+    return Array.isArray(arr) ? arr.filter((h) => typeof h === "string") : [];
+  } catch {
+    return [];
+  }
+}
+function rememberHost(host) {
+  const h = host.toLowerCase();
+  if (!h) return;
+  try {
+    const next4 = [h, ...dynamicHosts().filter((x) => x !== h)].slice(0, CAP);
+    mkdirSync7(dir2, { recursive: true });
+    const tmp = `${path}.${process.pid}.tmp`;
+    writeFileSync6(tmp, JSON.stringify(next4, null, 2));
+    renameSync6(tmp, path);
+  } catch {
+  }
 }
 
 // src/sources/podcast.ts
@@ -1141,7 +1494,7 @@ function parseFeed(xml) {
   return { channel: textOf(head, "title"), episodes };
 }
 async function fetchText(url) {
-  const r = await fetch(url, { redirect: "follow" });
+  const r = await request(url, { redirect: "follow" });
   if (!r.ok) throw new Error(`Fetch failed (${r.status}) for ${url}`);
   return r.text();
 }
@@ -1160,27 +1513,30 @@ function embeddedDirectUrl(url) {
   }
   return null;
 }
-async function probe(url) {
+async function probe(url, budgetMs = 2500) {
   try {
-    const r = await fetch(url, {
+    const r = await request(url, {
       redirect: "follow",
       headers: { Range: "bytes=0-0", "User-Agent": "Mozilla/5.0" }
-    });
+    }, { probe: true, timeoutMs: Math.min(2500, budgetMs), budgetMs, retries: 0 });
     try {
       await r.body?.cancel();
     } catch {
     }
     return r.ok ? url : null;
   } catch {
+    checkCancelled();
     return null;
   }
 }
 async function resolveDirect(url) {
   const direct = embeddedDirectUrl(url);
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (direct && await probe(direct)) return direct;
-    if (await probe(url)) return url;
-    await new Promise((res) => setTimeout(res, 300));
+  const deadline = Date.now() + 1e4;
+  for (let attempt = 0; attempt < 3 && Date.now() < deadline; attempt++) {
+    if (direct && Date.now() < deadline && await probe(direct, deadline - Date.now())) return direct;
+    if (Date.now() < deadline && await probe(url, deadline - Date.now())) return url;
+    if (Date.now() >= deadline) break;
+    await wait(Math.min(300, deadline - Date.now()));
   }
   return url;
 }
@@ -1198,19 +1554,21 @@ async function playIndex(feedUrl, name, index) {
   if (episodes.length === 0) throw new Error("The feed has no playable episodes (no audio enclosures).");
   const i = Math.max(0, Math.min(index, episodes.length - 1));
   const ep = episodes[i];
-  if (now.source === "spotify") {
-    try {
-      await pause();
-    } catch {
-    }
-  }
-  if (now.source === "applemusic") pauseIfRunning();
   const direct = await resolveDirect(ep.url);
   try {
     rememberHost(new URL(direct).host);
   } catch {
   }
-  play(direct, now.volume);
+  await playbackEffect(async () => {
+    if (now.source === "spotify") {
+      try {
+        await pause();
+      } catch {
+      }
+    }
+    if (now.source === "applemusic") pauseIfRunning();
+    await play(direct, now.volume);
+  });
   const displayName = name ?? channel ?? feedUrl;
   now.state = "playing";
   now.source = "podcast";
@@ -1242,11 +1600,12 @@ async function resume3() {
 }
 
 // src/sources/hoer.ts
-import { execFileSync as execFileSync4 } from "node:child_process";
+import { promisify } from "node:util";
+import { execFile } from "node:child_process";
 var HOME = "https://hoer.live/";
 var UA = { "User-Agent": "Mozilla/5.0" };
 async function currentVideo() {
-  const r = await fetch(HOME, { headers: UA, redirect: "follow" });
+  const r = await request(HOME, { headers: UA, redirect: "follow" });
   if (!r.ok) throw new Error(`hoer.live returned ${r.status}.`);
   const html = await r.text();
   const m = html.match(/videoId:\s*['"]([\w-]{6,20})['"]/);
@@ -1254,13 +1613,13 @@ async function currentVideo() {
   const id = m[1];
   let title = null;
   try {
-    const o = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`);
+    const o = await request(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`);
     if (o.ok) title = (await o.json()).title ?? null;
   } catch {
   }
   return { id, title };
 }
-function resolveAudioUrl(id) {
+async function resolveAudioUrl(id) {
   const args = ["-g", "-f", "bestaudio/best"];
   const cookieFile = process.env.HOER_COOKIES_FILE?.trim();
   const browser = process.env.HOER_COOKIES_FROM_BROWSER?.trim();
@@ -1269,7 +1628,7 @@ function resolveAudioUrl(id) {
   args.push(`https://www.youtube.com/watch?v=${id}`);
   let out;
   try {
-    out = execFileSync4("yt-dlp", args, { encoding: "utf8", timeout: 6e4, windowsHide: true });
+    out = (await promisify(execFile)("yt-dlp", args, { encoding: "utf8", timeout: 3e4, windowsHide: true, signal: operationSignal() })).stdout;
   } catch (e) {
     if (e.code === "ENOENT")
       throw new Error(
@@ -1292,19 +1651,21 @@ function resolveAudioUrl(id) {
 }
 async function play3() {
   const { id, title } = await currentVideo();
-  const url = resolveAudioUrl(id);
-  if (now.source === "spotify") {
-    try {
-      await pause();
-    } catch {
-    }
-  }
-  if (now.source === "applemusic") pauseIfRunning();
+  const url = await resolveAudioUrl(id);
   try {
     rememberHost(new URL(url).host);
   } catch {
   }
-  play(url, now.volume);
+  await playbackEffect(async () => {
+    if (now.source === "spotify") {
+      try {
+        await pause();
+      } catch {
+      }
+    }
+    if (now.source === "applemusic") pauseIfRunning();
+    await play(url, now.volume);
+  });
   now.state = "playing";
   now.source = "hoer";
   now.title = title ?? "H\xD6R Berlin";
@@ -1315,15 +1676,15 @@ async function resume4() {
 }
 
 // src/doctor.ts
-import { execFileSync as execFileSync5 } from "node:child_process";
+import { execFileSync as execFileSync4 } from "node:child_process";
 import { existsSync as existsSync6 } from "node:fs";
-import { homedir as homedir5 } from "node:os";
-import { join as join8 } from "node:path";
+import { homedir as homedir3 } from "node:os";
+import { join as join9 } from "node:path";
 var icon = { ok: "\u2713", warn: "!", fail: "\u2717" };
 function onPath(bin) {
   try {
-    if (process.platform === "win32") execFileSync5("where", [bin], { stdio: "ignore", windowsHide: true });
-    else execFileSync5("sh", ["-c", `command -v ${bin}`], { stdio: "ignore" });
+    if (process.platform === "win32") execFileSync4("where", [bin], { stdio: "ignore", windowsHide: true });
+    else execFileSync4("sh", ["-c", `command -v ${bin}`], { stdio: "ignore" });
     return true;
   } catch {
     return false;
@@ -1342,7 +1703,7 @@ function checkYtDlp() {
 }
 function checkSpotify() {
   const hasId = !!process.env.SPOTIFY_CLIENT_ID;
-  const hasToken = existsSync6(join8(homedir5(), ".pirate-radio", "spotify.json"));
+  const hasToken = existsSync6(join9(homedir3(), ".pirate-radio", "spotify.json"));
   if (!hasId && !hasToken)
     return { level: "warn", label: "Spotify", detail: "not configured \u2014 set SPOTIFY_CLIENT_ID, then /spotify-login (optional)" };
   if (hasId && !hasToken)
@@ -1427,11 +1788,11 @@ ${describe()}`
     schema: noArgs,
     handler: async () => {
       if (now.source === "spotify") {
-        await skipNext();
+        await playbackEffect(() => skipNext());
         return "Next track.";
       }
       if (now.source === "applemusic") {
-        next();
+        await playbackEffect(() => next());
         return "Next track.";
       }
       if (now.source === "podcast") return next3();
@@ -1446,11 +1807,11 @@ ${describe()}`
     schema: noArgs,
     handler: async () => {
       if (now.source === "spotify") {
-        await skipPrev();
+        await playbackEffect(() => skipPrev());
         return "Previous track.";
       }
       if (now.source === "applemusic") {
-        prev();
+        await playbackEffect(() => prev());
         return "Previous track.";
       }
       if (now.source === "podcast") return prev3();
@@ -1461,7 +1822,7 @@ ${describe()}`
   },
   {
     name: "radio_pause",
-    description: "Pause playback (radio/podcast: stops the stream; Spotify/Apple Music: pauses the app).",
+    description: "Pause playback in place via mpv IPC or the remote app; ffplay requires stop instead.",
     schema: noArgs,
     handler: async () => {
       if (now.state === "stopped" && !now.source) {
@@ -1473,28 +1834,24 @@ ${describe()}`
         now.state = "stopped";
         return "Stopped.";
       }
-      if (now.source === "spotify") {
-        try {
-          await pause();
-        } catch {
-        }
-      } else if (now.source === "applemusic") {
-        try {
-          pause2();
-        } catch {
-        }
-      } else stop();
+      if (now.source === "spotify") await pause();
+      else if (now.source === "applemusic") pause2();
+      else if (!await setPaused(true)) throw new Error("No live player to pause. Use radio_resume to restart.");
       now.state = "paused";
       return "|| Paused.";
     }
   },
   {
     name: "radio_resume",
-    description: "Resume playback (a paused podcast restarts its episode from the top).",
+    description: "Resume a live mpv player at its saved position; restart only if the player has exited.",
     schema: noArgs,
     handler: async () => {
-      if (now.source === "spotify") await resume();
-      else if (now.source === "applemusic") resume2();
+      if (["radio", "podcast", "hoer"].includes(now.source ?? "") && await playbackEffect(() => setPaused(false))) {
+        now.state = "playing";
+        return "> Resumed at the current position.";
+      }
+      if (now.source === "spotify") await playbackEffect(() => resume());
+      else if (now.source === "applemusic") await playbackEffect(() => resume2());
       else if (now.source === "podcast") return resume3();
       else if (now.source === "hoer") return resume4();
       else if (now.source === "radio" && now.genre) await playGenre(now.genre, now.stationIndex);
@@ -1508,17 +1865,9 @@ ${describe()}`
     description: "Stop playback entirely.",
     schema: noArgs,
     handler: async () => {
-      if (now.source === "spotify") {
-        try {
-          await pause();
-        } catch {
-        }
-      } else if (now.source === "applemusic") {
-        try {
-          stop2();
-        } catch {
-        }
-      } else stop();
+      if (now.source === "spotify") await pause();
+      else if (now.source === "applemusic") stop2();
+      else stop();
       now.state = "stopped";
       now.source = null;
       return "[] Stopped.";
@@ -1546,29 +1895,19 @@ ${describe()}`
   },
   {
     name: "radio_volume",
-    description: "Set volume 0-100 (applies to radio; restarts the current stream).",
+    description: "Set volume 0-100 without restarting mpv; ffplay requires mpv for live volume control.",
     schema: { type: "object", properties: { level: { type: "number", minimum: 0, maximum: 100 } }, required: ["level"] },
     handler: async (a) => {
       const raw = a.level;
       const level = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : NaN;
       if (!Number.isFinite(level)) throw new Error("Give a volume 0-100, e.g. level=60.");
       now.volume = Math.max(0, Math.min(100, Math.round(level)));
-      if (now.source === "radio" && now.state === "playing" && now.genre)
-        await playGenre(now.genre, now.stationIndex);
-      else if (now.source === "podcast" && now.state === "playing")
-        await resume3();
-      else if (now.source === "hoer" && now.state === "playing")
-        await resume4();
+      if (["radio", "podcast", "hoer"].includes(now.source ?? "") && now.state !== "stopped")
+        await setVolume(now.volume);
       else if (now.source === "spotify" && now.state === "playing") {
-        try {
-          await setVolume(now.volume);
-        } catch {
-        }
+        await setVolume2(now.volume);
       } else if (now.source === "applemusic" && now.state === "playing") {
-        try {
-          setVolume2(now.volume);
-        } catch {
-        }
+        setVolume3(now.volume);
       }
       return `vol ${now.volume}`;
     }
@@ -1602,7 +1941,7 @@ ${loginUrl()}`
     handler: async (a) => {
       const wasAppleMusic = now.source === "applemusic";
       const out = await playContext(String(a.target));
-      if (wasAppleMusic) pauseIfRunning();
+      if (wasAppleMusic) await playbackEffect(() => pauseIfRunning());
       return out;
     }
   },
@@ -1653,6 +1992,13 @@ ${loginUrl()}`
     handler: () => doctor()
   }
 ];
+var mutations = /* @__PURE__ */ new Set(["radio_play", "radio_next", "radio_prev", "radio_pause", "radio_resume", "radio_stop", "radio_volume", "podcast_play", "hoer_play", "music_play", "spotify_play_playlist", "spotify_transfer"]);
+var directEffects = /* @__PURE__ */ new Set(["radio_pause", "radio_stop", "radio_volume", "spotify_transfer"]);
+async function runTool(name, args = {}, signal) {
+  const tool = tools.find((t) => t.name === name);
+  if (!tool) throw new Error(`Unknown tool: ${name}`);
+  return withBudget(() => withState(() => directEffects.has(name) ? playbackEffect(() => tool.handler(args)) : tool.handler(args), mutations.has(name)), signal);
+}
 
 // src/argparse.ts
 function parseArgs(rest, schema) {
@@ -1711,7 +2057,7 @@ async function main() {
     process.exit(1);
   }
   try {
-    const out = await withState(() => tool.handler(args));
+    const out = await runTool(tool.name, args);
     process.stdout.write(out + "\n");
   } catch (e) {
     console.error(`Error: ${e.message}`);

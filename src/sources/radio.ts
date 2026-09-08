@@ -2,7 +2,7 @@
 import * as player from "../player.js";
 import * as spotify from "./spotify.js";
 import * as applemusic from "./applemusic.js";
-import { now } from "../state.js";
+import { now, playbackEffect } from "../state.js";
 import { all, acceptedGenres, genreInfo, genres as allGenres, resolveGenre, type Station } from "../stations.js";
 
 const stations = all();
@@ -23,19 +23,21 @@ export function list(): string {
 export async function playGenre(genre: string, index = 0): Promise<Station> {
   const g = resolveGenre(genre);
   if (!g) throw new Error(`Unknown genre "${genre}". Available: ${acceptedGenres().join(", ")}`);
-  // If we were on a remote source (Spotify Connect, Music.app), silence it
-  // before starting the local stream — otherwise both would play simultaneously
-  // (they run in their own apps; our player.stop() only kills local mpv/ffplay).
-  if (now.source === "spotify") {
-    try { await spotify.pause(); } catch { /* best effort — network / not-logged-in */ }
-  }
-  if (now.source === "applemusic") applemusic.pauseIfRunning();
   // Floor-mod, not JS %: a negative or fractional index (corrupt state.json,
   // prev() underflow) must still land on a real station, not stations[-1].
   const len = stations[g].length;
   const i = ((Math.trunc(index) % len) + len) % len;
   const st = stations[g][i];
-  player.play(st.url, now.volume);
+  await playbackEffect(async () => {
+    // If we were on a remote source (Spotify Connect, Music.app), silence it
+    // before starting the local stream — otherwise both would play simultaneously
+    // (they run in their own apps; our player.stop() only kills local mpv/ffplay).
+    if (now.source === "spotify") {
+      try { await spotify.pause(); } catch { /* best effort — network / not-logged-in */ }
+    }
+    if (now.source === "applemusic") applemusic.pauseIfRunning();
+    await player.play(st.url, now.volume);
+  });
   now.state = "playing";
   now.source = "radio";
   now.genre = g;

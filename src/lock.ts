@@ -1,106 +1,112 @@
-// Cross-process lock primitive. Used by both the registry (players.json) and
-// shared state (state.json) so read-modify-write from CLI + MCP + watchdog can't
-// lost-update each other. Each caller passes its OWN lock directory path — the
-// two lock domains are independent so registry ops don't block state ops.
-//
-// mkdir is atomic on win32/macOS/Linux: exactly one caller wins the create.
-// A holder file inside records pid + start-token so we can break a lock whose
-// owner has died WITHOUT being fooled by PID reuse.
-import { mkdirSync, readFileSync, writeFileSync, renameSync, rmSync, rmdirSync, statSync, existsSync } from "node:fs";
+// Cross-process locks for the registry and shared state. A fully initialized,
+// non-empty directory is published with rename: contenders can never observe
+// a new lock before its unique owner file exists. Reclaim only the observed
+// owner's file, then rmdir (never recursive removal of the shared lock path).
+import { mkdirSync, readFileSync, writeFileSync, renameSync, rmSync, rmdirSync, statSync, existsSync, readdirSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { pidAlive, procStartToken, sameProcess } from "./proc.js";
+import { randomUUID } from "node:crypto";
+import { procStartToken, sameProcess } from "./proc.js";
 
 const LOCK_STALE_MS = 15_000;
-// How long we wait for a LIVE holder before giving up and stealing. Longer than
-// the previous 5s because a legit critical section can hold the lock across a
-// Spotify API round-trip. Deadlocks with a live holder shouldn't happen — if
-// they do, stealing after 30s at least keeps the tool responsive.
+// A live holder is NEVER stolen, even if it exceeds this wait budget.
 const LOCK_WAIT_MS = 30_000;
 
 function sleep(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-export function withCrossProcessLock<T>(lockPath: string, fn: () => T): T {
-  mkdirSync(dirname(lockPath), { recursive: true });
-  const holderFile = join(lockPath, "holder");
-  const deadline = Date.now() + LOCK_WAIT_MS;
-  for (;;) {
-    try {
-      mkdirSync(lockPath); // atomic: throws EEXIST if held
-      break;
-    } catch {
-      // Held. Break it only if the holder is dead (or PID was recycled).
-      let broke = false;
-      try {
-        const raw = readFileSync(holderFile, "utf8").trim();
-        const parts = raw.split("\n");
-        const holderPid = Number(parts[0]);
-        const holderToken = parts[1] || null;
-        // sameProcess checks pidAlive AND token match — a recycled PID with a
-        // different start-token is correctly treated as "holder dead". This was
-        // bare pidAlive before, which let a recycled PID wedge the lock forever.
-        if (!sameProcess(holderPid, holderToken)) broke = true;
-      } catch {
-        // No holder file yet (racing creator) or unreadable — use age as signal.
-        try {
-          const age = Date.now() - statSync(lockPath).mtimeMs;
-          if (age > LOCK_STALE_MS) broke = true;
-        } catch {
-          /* lock vanished between check and stat — retry */
-        }
-      }
-      if (broke) {
-        // Atomic steal: rename the stale lock to a pid-unique temp name. Only
-        // ONE process can successfully rename the source (the loser gets ENOENT).
-        // This eliminates the old race where two processes both rm -rf'd and
-        // both mkdir'd, putting two holders in the critical section.
-        const dead = `${lockPath}.dead.${process.pid}`;
-        try {
-          renameSync(lockPath, dead);
-          rmSync(dead, { recursive: true, force: true });
-        } catch {
-          // rename failed (ENOENT) — another process already stole it. Fine.
-        }
-        continue;
-      }
-      if (Date.now() > deadline) {
-        throw new Error(`Timed out waiting for lock: ${lockPath}`);
-      }
-      sleep(50);
-    }
-  }
+function reclaimDeadOwner(lockPath: string): void {
   try {
-    // Write pid AND start-token so the steal logic can detect PID reuse.
-    const token = procStartToken(process.pid) ?? "";
-    writeFileSync(holderFile, `${process.pid}\n${token}`);
+    const files = readdirSync(lockPath);
+    if (files.length === 0) {
+      // Compatibility with empty directories left by the old mkdir-first lock.
+      if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) rmdirSync(lockPath);
+      return;
+    }
+    if (files.length !== 1) return;
+    const name = files[0];
+    // "holder" is the old on-disk format; new owners always have a UUID name.
+    if (name !== "holder" && !/^holder-[0-9a-f-]{36}$/.test(name)) return;
+    const holder = join(lockPath, name);
+    const [pidText, token] = readFileSync(holder, "utf8").trim().split("\n");
+    const pid = Number(pidText);
+    if (!Number.isInteger(pid) || pid <= 0) {
+      if (Date.now() - statSync(holder).mtimeMs <= LOCK_STALE_MS) return;
+    } else if (sameProcess(pid, token || null)) {
+      return;
+    }
+    // If another reclaimer already published a new lock, its owner filename is
+    // different: unlink fails, or rmdir fails because that directory is not empty.
+    // A stale observation can therefore NEVER remove a fresh owner's lock.
+    unlinkSync(holder);
+    rmdirSync(lockPath);
+  } catch {
+    // Another contender raced us, or permissions prevent reclaiming. The caller
+    // retries within a bounded deadline; do not recursively delete shared paths.
+  }
+}
+
+function release(lockPath: string, owner: string): void {
+  try { unlinkSync(join(lockPath, owner)); } catch { /* already gone */ }
+  try { rmdirSync(lockPath); } catch { /* absent, or belongs to another owner */ }
+}
+
+function* acquireSteps(lockPath: string): Generator<void, string> {
+  mkdirSync(dirname(lockPath), { recursive: true });
+  const id = randomUUID();
+  const owner = `holder-${id}`;
+  const staged = `${lockPath}.claim.${process.pid}.${id}`;
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  mkdirSync(staged);
+  try {
+    writeFileSync(join(staged, owner), `${process.pid}\n${procStartToken(process.pid) ?? ""}`);
+    for (;;) {
+      try {
+        // Both directories are on the same filesystem. A non-empty destination
+        // cannot be replaced, on Windows, macOS or Linux.
+        renameSync(staged, lockPath);
+        return owner;
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code;
+        const occupied = code === "EEXIST" || code === "ENOTEMPTY";
+        const windowsOccupied = (code === "EPERM" || code === "EACCES") && existsSync(lockPath);
+        if (!occupied && !windowsOccupied) throw e;
+      }
+      if (Date.now() >= deadline) throw new Error(`Timed out waiting for lock: ${lockPath}`);
+      reclaimDeadOwner(lockPath);
+      yield;
+    }
+  } finally {
+    // This is a private staging directory, never the shared lock directory.
+    rmSync(staged, { recursive: true, force: true });
+  }
+}
+
+export function withCrossProcessLock<T>(lockPath: string, fn: () => T): T {
+  const steps = acquireSteps(lockPath);
+  let step = steps.next();
+  while (!step.done) { sleep(50); step = steps.next(); }
+  const owner = step.value;
+  try {
     const result = fn();
     if (result && typeof (result as unknown as { then?: unknown }).then === "function") {
       return (async () => {
         try {
           return await (result as unknown as Promise<T>);
         } finally {
-          release(lockPath);
+          release(lockPath, owner);
         }
       })() as T;
     }
-    release(lockPath);
+    release(lockPath, owner);
     return result;
   } catch (e) {
-    release(lockPath);
+    release(lockPath, owner);
     throw e;
   }
 }
 
-function release(lockPath: string): void {
-  try { rmSync(join(lockPath, "holder"), { force: true }); } catch { /* ignore */ }
-  try { rmdirSync(lockPath); } catch { /* already gone */ }
-}
-
-// Lock-free variants for use in exit/cleanup paths where blocking is not safe.
-// These bypass mutual exclusion — only use when the process is about to die and
-// no in-process concurrency exists.
-
+// Lock-free variants for exit/cleanup paths where blocking is not safe.
 export function readRegistryUnsafe(registryPath: string): { players: Array<{ pid: number; token: string | null }>; watchdogs: Array<{ pid: number; token: string | null }> } {
   if (!existsSync(registryPath)) return { players: [], watchdogs: [] };
   try {
@@ -117,4 +123,25 @@ export function saveStateUnsafe(statePath: string, data: unknown): void {
     writeFileSync(tmp, JSON.stringify(data, null, 2));
     renameSync(tmp, statePath);
   } catch { /* best effort */ }
+}
+
+// Async effect serialization must not block the event loop while another
+// command awaits network/IPC. State and registry locks remain short and sync.
+export async function acquireAsyncCrossProcessLock(path: string, signal?: AbortSignal): Promise<() => void> {
+  const steps = acquireSteps(path);
+  try {
+    for (;;) {
+      signal?.throwIfAborted();
+      const step = steps.next();
+      if (step.done) {
+        const owner = step.value;
+        return () => release(path, owner);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  } finally { steps.return(""); }
+}
+export async function withAsyncCrossProcessLock<T>(path: string, fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  const release = await acquireAsyncCrossProcessLock(path, signal);
+  try { signal?.throwIfAborted(); return await fn(); } finally { release(); }
 }

@@ -18,10 +18,11 @@
 // Session auto-stop works unchanged on MCP hosts: the stdio server is a child of
 // the agent process, so when the agent exits the anchor dies and the watchdog
 // kills playback. Nothing here needs to re-implement that.
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, unlinkSync, rmSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, rmdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { managedFiles } from "./install-files.mjs";
 
 const root = dirname(fileURLToPath(import.meta.url));
 // Use forward slashes even on Windows. Node accepts them everywhere, and it
@@ -91,37 +92,34 @@ function report(action, path) {
   process.stdout.write(`  ${action}  ${path.replace(home, "~")}\n`);
 }
 
-function writeGenerated(path, content) {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, content);
-  report("write", path);
-}
-function removeIfOurs(path) {
-  if (!existsSync(path)) return;
-  unlinkSync(path);
-  report("remove", path);
-}
+const managed = managedFiles(home, report);
+const writeGenerated = managed.write;
+const removeIfOurs = managed.remove;
 
 // --- codex ------------------------------------------------------------------
 const codexDir = join(home, ".codex");
 function installCodex(un) {
   const cfg = join(codexDir, "config.toml");
-  const header = "[mcp_servers.radiohead]";
-  let toml = existsSync(cfg) ? readFileSync(cfg, "utf8") : "";
+  const toml = existsSync(cfg) ? readFileSync(cfg, "utf8") : "";
+  const pattern = /^\[mcp_servers\.radiohead\][^\S\r\n]*\r?\n[\s\S]*?(?=^\[|(?![\s\S]))/m;
+  const current = toml.match(pattern)?.[0];
+  const unsupported = current === undefined && /^[ \t]*\[[^\r\n]*radiohead/m.test(toml);
+  const key = `${cfg}#mcp_servers.radiohead`;
+  const desired = `[mcp_servers.radiohead]\ncommand = ${JSON.stringify(nodeBin)}\nargs = [${JSON.stringify(serverJs)}]\n`;
   if (un) {
-    // Drop our table: from the header up to (not including) the next table
-    // header at start-of-line, or end of file. `[` inside a value (e.g. an
-    // args array) must not terminate the match.
-    const next = toml.replace(/\n?\[mcp_servers\.radiohead\][\s\S]*?(?=\n\[|$)/, "");
-    if (next !== toml) { writeFileSync(cfg, next); report("edit ", cfg); }
+    if (current !== undefined && managed.mayChange(key, current)) {
+      managed.writeConfig(cfg, toml.replace(pattern, ""));
+      managed.remember(key, undefined);
+    }
     for (const c of commands) removeIfOurs(join(codexDir, "prompts", `${c.name}.md`));
     return;
   }
-  if (!toml.includes(header)) {
-    const block = `${toml.endsWith("\n") || toml === "" ? "" : "\n"}\n${header}\ncommand = "${nodeBin}"\nargs = ["${serverJs}"]\n`;
-    mkdirSync(codexDir, { recursive: true });
-    writeFileSync(cfg, toml + block);
-    report("edit ", cfg);
+  if (unsupported) report("skip (unsupported TOML layout)", cfg);
+  else if (managed.mayChange(key, current)) {
+    managed.writeConfig(cfg, current === undefined
+      ? toml + (toml.endsWith("\n") || !toml ? "" : "\n") + desired
+      : toml.replace(pattern, () => desired));
+    managed.remember(key, desired);
   }
   for (const c of commands) {
     const how = c.args.includes("$ARGUMENTS")
@@ -144,22 +142,25 @@ function installOpencode(un) {
       json = null;
     }
   }
+  const key = `${cfg}#mcp.radiohead`;
+  const current = json?.mcp?.radiohead;
+  const encoded = current === undefined ? undefined : JSON.stringify(current);
   if (un) {
-    if (json?.mcp?.radiohead) {
+    if (current !== undefined && managed.mayChange(key, encoded)) {
       delete json.mcp.radiohead;
       if (Object.keys(json.mcp).length === 0) delete json.mcp;
-      writeFileSync(cfg, JSON.stringify(json, null, 2) + "\n");
-      report("edit ", cfg);
+      managed.writeConfig(cfg, JSON.stringify(json, null, 2) + "\n");
+      managed.remember(key, undefined);
     }
     for (const c of commands) removeIfOurs(join(opencodeDir, "commands", `${c.name}.md`));
     return;
   }
-  if (json) {
+  if (json && managed.mayChange(key, encoded)) {
+    const entry = { type: "local", command: [nodeBin, serverJs], enabled: true };
     json.$schema ??= "https://opencode.ai/config.json";
-    json.mcp = { ...json.mcp, radiohead: { type: "local", command: [nodeBin, serverJs], enabled: true } };
-    mkdirSync(opencodeDir, { recursive: true });
-    writeFileSync(cfg, JSON.stringify(json, null, 2) + "\n");
-    report("edit ", cfg);
+    json.mcp = { ...json.mcp, radiohead: entry };
+    managed.writeConfig(cfg, JSON.stringify(json, null, 2) + "\n");
+    managed.remember(key, JSON.stringify(entry));
   }
   // opencode supports the same !`cmd` shell injection as Claude Code, so the
   // command bodies stay deterministic instead of prompting the model.
@@ -173,25 +174,35 @@ function installOpencode(un) {
 const hermesDir = join(home, ".hermes");
 function installHermes(un) {
   const cfg = join(hermesDir, "config.yaml");
-  const ours = `  radiohead:\n    command: "${nodeBin}"\n    args: ["${serverJs}"]\n`;
+  const ours = `  radiohead:\n    command: ${JSON.stringify(nodeBin)}\n    args: [${JSON.stringify(serverJs)}]\n`;
   let yaml = existsSync(cfg) ? readFileSync(cfg, "utf8") : "";
+  const key = `${cfg}#mcp_servers.radiohead`;
+  const section = yaml.match(/^mcp_servers:[^\S\r\n]*\r?\n[\s\S]*?(?=^[^\s#]|(?![\s\S]))/m)?.[0];
+  const pattern = /^  radiohead:[^\S\r\n]*\r?\n[\s\S]*?(?=^  [^\s#]|(?![\s\S]))/m;
+  const current = section?.match(pattern)?.[0];
+  const unsupported = /^mcp_servers:/m.test(yaml) && section === undefined
+    || current === undefined && /^[ \t]+[^\r\n]*radiohead/m.test(section ?? "");
   if (un) {
-    const next = yaml.replace(ours, "");
-    if (next !== yaml) { writeFileSync(cfg, next); report("edit ", cfg); }
+    if (current !== undefined && managed.mayChange(key, current)) {
+      managed.writeConfig(cfg, yaml.replace(section, () => section.replace(pattern, "")));
+      managed.remember(key, undefined);
+    }
     return;
   }
-  if (yaml.match(/^\s{2}radiohead:/m)) return; // already configured
-  if (yaml.match(/^mcp_servers:/m)) {
-    // Insert our entry directly under the existing top-level key. Anything more
-    // surgical needs a YAML parser; if the file uses a layout this misses,
-    // hermes will complain on startup and the snippet below still applies.
-    yaml = yaml.replace(/^mcp_servers:\s*\n/m, (s) => s + ours);
+  if (unsupported) { report("skip (unsupported YAML layout)", cfg); return; }
+  if (!managed.mayChange(key, current)) return;
+  if (current !== undefined) yaml = yaml.replace(section, () => section.replace(pattern, () => ours));
+  else if (/^mcp_servers:/m.test(yaml)) {
+    if (!/^mcp_servers:[^\S\r\n]*\r?\n/m.test(yaml)) {
+      report("skip (unsupported YAML layout)", cfg);
+      return;
+    }
+    yaml = yaml.replace(/^mcp_servers:[^\S\r\n]*\r?\n/m, (line) => line + ours);
   } else {
-    yaml += `${yaml.endsWith("\n") || yaml === "" ? "" : "\n"}mcp_servers:\n${ours}`;
+    yaml += `${yaml.endsWith("\n") || !yaml ? "" : "\n"}mcp_servers:\n${ours}`;
   }
-  mkdirSync(hermesDir, { recursive: true });
-  writeFileSync(cfg, yaml);
-  report("edit ", cfg);
+  managed.writeConfig(cfg, yaml);
+  managed.remember(key, ours);
 }
 
 // --- pi -----------------------------------------------------------------------
@@ -200,7 +211,8 @@ function installPi(un) {
   const skillDir = join(piDir, "skills", "radiohead");
   if (un) {
     for (const c of commands) removeIfOurs(join(piDir, "prompts", `${c.name}.md`));
-    if (existsSync(skillDir)) { rmSync(skillDir, { recursive: true }); report("remove", skillDir); }
+    removeIfOurs(join(skillDir, "SKILL.md"));
+    try { rmdirSync(skillDir); } catch { /* preserve extra user files */ }
     return;
   }
   for (const c of commands) {

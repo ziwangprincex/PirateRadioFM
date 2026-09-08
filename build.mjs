@@ -1,6 +1,6 @@
 // Builds ready-to-run production bundles plus dedicated lifecycle-test bundles.
 import { build } from "esbuild";
-import { rm } from "node:fs/promises";
+import { rm, cp } from "node:fs/promises";
 
 await rm("dist", { recursive: true, force: true });
 await rm(".test-dist", { recursive: true, force: true });
@@ -32,6 +32,7 @@ await build({
     index: "src/index.ts",
     watchdog: "src/watchdog.ts",
     lifecyclecheck: "src/lifecyclecheck.ts",
+    optimizationcheck: "src/optimizationcheck.ts",
   },
   outdir: ".test-dist/lifecycle",
   define: { __RADIOHEAD_LIFECYCLE_TEST_MODE__: "true" },
@@ -43,3 +44,5 @@ await build({
   outdir: ".test-dist/lifecycle",
   define: { __RADIOHEAD_LIFECYCLE_TEST_MODE__: "false" },
 });
+
+await cp("data", ".test-dist/data", { recursive: true });

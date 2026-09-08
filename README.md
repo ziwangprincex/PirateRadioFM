@@ -37,8 +37,17 @@ node install.mjs
 ```
 
 With no arguments it configures every agent found on the machine. To pick one:
-`node install.mjs codex` (or `opencode`, `hermes`, `pi`). To remove everything
-it wrote: `node install.mjs --uninstall`. Restart the agent after installing.
+`node install.mjs codex` (or `opencode`, `hermes`, `pi`). To remove unchanged,
+installer-managed files and MCP entries: `node install.mjs --uninstall`. Restart
+the agent after installing.
+
+Existing untracked files and user edits are preserved and reported as `skip`.
+Ownership hashes are stored in `~/.pirate-radio/install-manifest.json`; backups
+before managed updates are kept in `~/.pirate-radio/install-backups/`. Installs
+from older versions have no ownership manifest, so they are preserved too: back
+up and manually move conflicting files/entries before reinstalling if needed.
+Do not run multiple installers concurrently. When upgrading the lock protocol,
+stop all old agent sessions first, then restart them using the new bundles.
 
 What it writes:
 
@@ -48,6 +57,31 @@ What it writes:
 - pi: prompt templates in `~/.pi/agent/prompts/`, skill in `~/.pi/agent/skills/radiohead/`
 
 pi does not support MCP, so its commands call `dist/cli.js` directly.
+
+## Playback safety and concurrency
+
+mpv uses JSON IPC for pause, resume, and volume without restarting; a paused
+podcast retains its position while the player lives. ffplay remains a playback
+fallback, but pause/live volume report an actionable error rather than silently
+restarting the episode. Install mpv for full controls.
+
+Network work runs outside the state lock. HTTP requests default to an 8-second
+attempt timeout and a 15-second retry budget (at most one retry for reads; writes
+are never automatically replayed). Network/IPC operations share a cancellable
+45-second command budget; synchronous Music.app commands have their own timeout.
+New playback intents supersede older requests still resolving media. Effects
+already underway are serialized through state commit before the next command.
+
+Cleanup uses session IDs, process start tokens and a dedicated player marker,
+never just a station hostname. The default CLI and MCP server share one scope;
+only one MCP server can claim that scope at a time. pi sessions are isolated
+automatically. For multiple MCP sessions, set a distinct `PIRATE_RADIO_SESSION`
+value in each agent environment, and use the same value for its CLI commands.
+Scoped state lives under `~/.pirate-radio/sessions/`; Spotify credentials remain
+shared. Remote Spotify/Music.app devices are not independently isolated.
+
+Old unregistered, unmarked players are deliberately not swept: stop them manually
+when upgrading. Exit all old sessions before loading the new bundles.
 
 ## Commands
 

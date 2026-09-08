@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);
 
-// src/state.ts
-import { readFileSync as readFileSync4, writeFileSync as writeFileSync3, renameSync as renameSync3, mkdirSync as mkdirSync3, existsSync as existsSync3, unlinkSync } from "node:fs";
-import { homedir as homedir2 } from "node:os";
-import { join as join3 } from "node:path";
+// src/session.ts
+import { homedir } from "node:os";
+import { join as join2 } from "node:path";
+import { createHash, randomUUID as randomUUID2 } from "node:crypto";
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync2, renameSync as renameSync2, unlinkSync as unlinkSync2 } from "node:fs";
 
 // src/proc.ts
 import { execFileSync } from "node:child_process";
@@ -66,6 +67,9 @@ function sameProcess(pid, token) {
   const cur = procStartToken(pid);
   return cur === null ? true : cur === token;
 }
+function killSameProcess(pid, token) {
+  if (sameProcess(pid, token)) killPid(pid);
+}
 function killPid(pid) {
   if (!pid || !Number.isInteger(pid) || pid <= 0) return;
   try {
@@ -91,13 +95,9 @@ function killPid(pid) {
   } catch {
   }
 }
-function findOrphanPlayers(hosts2) {
-  if (hosts2.length === 0) return [];
-  const wanted = hosts2.map((h) => h.toLowerCase());
-  const matches = (cmd) => {
-    const c = cmd.toLowerCase();
-    return wanted.some((h) => c.includes(h));
-  };
+function findOrphanPlayers(marker) {
+  if (!/^pirate-radio-[a-f0-9]{24}$/.test(marker)) return [];
+  const matches = (cmd) => cmd.split(/[\s\"]+/).some((arg) => arg === `--title=${marker}` || arg === marker);
   try {
     if (isWin) {
       const out2 = execFileSync(
@@ -111,7 +111,7 @@ function findOrphanPlayers(hosts2) {
       );
       return parsePidLines(out2, "	", matches);
     }
-    const out = execFileSync("ps", ["-eo", "pid=,args="], {
+    const out = execFileSync("ps", ["-eo", isMac ? "pid=,ucomm=,args=" : "pid=,comm=,args="], {
       encoding: "utf8",
       timeout: 8e3
     });
@@ -134,99 +134,118 @@ function parsePidLines(out, sep, matches) {
 function parseUnixPs(out, matches) {
   const pids = [];
   for (const line of out.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const sp = trimmed.indexOf(" ");
-    if (sp === -1) continue;
-    const pid = Number(trimmed.slice(0, sp));
-    const cmd = trimmed.slice(sp + 1);
-    if (!/(^|\/)(mpv|ffplay)\b/.test(cmd)) continue;
-    if (Number.isInteger(pid) && pid > 0 && matches(cmd)) pids.push(pid);
+    const row = line.trim().match(/^(\d+)\s+(mpv|ffplay)\s+([\s\S]+)$/);
+    if (!row) continue;
+    const pid = Number(row[1]);
+    if (Number.isInteger(pid) && pid > 0 && matches(row[3])) pids.push(pid);
   }
   return pids;
 }
-
-// src/registry.ts
-import {
-  readFileSync as readFileSync3,
-  writeFileSync as writeFileSync2,
-  renameSync as renameSync2,
-  mkdirSync as mkdirSync2,
-  existsSync as existsSync2
-} from "node:fs";
-import { homedir } from "node:os";
-import { join as join2 } from "node:path";
+function isPiProcess(name, args) {
+  if (name === "pi" || name === "pi.exe") return true;
+  if (args.includes("pi-coding-agent")) return true;
+  const argv1 = args.split(" ")[1] ?? "";
+  const base = argv1.slice(argv1.lastIndexOf("/") + 1);
+  return base === "pi" || base === "pi.js";
+}
+function enumerateProcesses() {
+  const map = /* @__PURE__ */ new Map();
+  if (isWin) {
+    const out2 = execFileSync(
+      "powershell",
+      [
+        "-NoProfile",
+        "-Command",
+        "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress"
+      ],
+      { encoding: "utf8", timeout: 8e3, windowsHide: true }
+    );
+    const rows = JSON.parse(out2.trim() || "[]");
+    for (const r of Array.isArray(rows) ? rows : [rows]) {
+      if (!r.ProcessId) continue;
+      map.set(r.ProcessId, {
+        pid: r.ProcessId,
+        ppid: r.ParentProcessId ?? 0,
+        name: r.Name ?? "",
+        args: r.CommandLine ?? ""
+      });
+    }
+    return map;
+  }
+  const out = execFileSync("ps", ["-eo", "pid=,ppid=,args="], {
+    encoding: "utf8",
+    timeout: 8e3
+  });
+  for (const line of out.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    const m = t.match(/^(\d+)\s+(\d+)\s+([\s\S]*)$/);
+    if (!m) continue;
+    const pid = Number(m[1]);
+    if (!Number.isInteger(pid) || pid <= 0) continue;
+    const args = m[3];
+    const argv0 = args.split(" ")[0] ?? "";
+    map.set(pid, {
+      pid,
+      ppid: Number(m[2]) || 0,
+      name: argv0.slice(argv0.lastIndexOf("/") + 1),
+      args
+    });
+  }
+  return map;
+}
+function findPiProcess() {
+  try {
+    const procs = enumerateProcesses();
+    const seen = /* @__PURE__ */ new Set();
+    let pid = process.ppid;
+    for (let depth = 0; depth < 32 && pid > 1 && !seen.has(pid); depth++) {
+      seen.add(pid);
+      const p = procs.get(pid);
+      if (!p) break;
+      if (isPiProcess(p.name, p.args)) return { pid, token: procStartToken(pid) };
+      pid = p.ppid;
+    }
+  } catch {
+  }
+  return null;
+}
 
 // src/lock.ts
-import { mkdirSync, readFileSync as readFileSync2, writeFileSync, renameSync, rmSync, rmdirSync, statSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync as readFileSync2, writeFileSync, renameSync, rmSync, rmdirSync, statSync, existsSync, readdirSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
 var LOCK_STALE_MS = 15e3;
 var LOCK_WAIT_MS = 3e4;
 function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
-function withCrossProcessLock(lockPath2, fn) {
-  mkdirSync(dirname(lockPath2), { recursive: true });
-  const holderFile = join(lockPath2, "holder");
-  const deadline = Date.now() + LOCK_WAIT_MS;
-  for (; ; ) {
-    try {
-      mkdirSync(lockPath2);
-      break;
-    } catch {
-      let broke = false;
-      try {
-        const raw = readFileSync2(holderFile, "utf8").trim();
-        const parts = raw.split("\n");
-        const holderPid = Number(parts[0]);
-        const holderToken = parts[1] || null;
-        if (!sameProcess(holderPid, holderToken)) broke = true;
-      } catch {
-        try {
-          const age = Date.now() - statSync(lockPath2).mtimeMs;
-          if (age > LOCK_STALE_MS) broke = true;
-        } catch {
-        }
-      }
-      if (broke) {
-        const dead = `${lockPath2}.dead.${process.pid}`;
-        try {
-          renameSync(lockPath2, dead);
-          rmSync(dead, { recursive: true, force: true });
-        } catch {
-        }
-        continue;
-      }
-      if (Date.now() > deadline) {
-        throw new Error(`Timed out waiting for lock: ${lockPath2}`);
-      }
-      sleep(50);
-    }
-  }
+function reclaimDeadOwner(lockPath2) {
   try {
-    const token = procStartToken(process.pid) ?? "";
-    writeFileSync(holderFile, `${process.pid}
-${token}`);
-    const result = fn();
-    if (result && typeof result.then === "function") {
-      return (async () => {
-        try {
-          return await result;
-        } finally {
-          release(lockPath2);
-        }
-      })();
+    const files = readdirSync(lockPath2);
+    if (files.length === 0) {
+      if (Date.now() - statSync(lockPath2).mtimeMs > LOCK_STALE_MS) rmdirSync(lockPath2);
+      return;
     }
-    release(lockPath2);
-    return result;
-  } catch (e) {
-    release(lockPath2);
-    throw e;
+    if (files.length !== 1) return;
+    const name = files[0];
+    if (name !== "holder" && !/^holder-[0-9a-f-]{36}$/.test(name)) return;
+    const holder = join(lockPath2, name);
+    const [pidText, token] = readFileSync2(holder, "utf8").trim().split("\n");
+    const pid = Number(pidText);
+    if (!Number.isInteger(pid) || pid <= 0) {
+      if (Date.now() - statSync(holder).mtimeMs <= LOCK_STALE_MS) return;
+    } else if (sameProcess(pid, token || null)) {
+      return;
+    }
+    unlinkSync(holder);
+    rmdirSync(lockPath2);
+  } catch {
   }
 }
-function release(lockPath2) {
+function release(lockPath2, owner) {
   try {
-    rmSync(join(lockPath2, "holder"), { force: true });
+    unlinkSync(join(lockPath2, owner));
   } catch {
   }
   try {
@@ -234,25 +253,137 @@ function release(lockPath2) {
   } catch {
   }
 }
+function* acquireSteps(lockPath2) {
+  mkdirSync(dirname(lockPath2), { recursive: true });
+  const id2 = randomUUID();
+  const owner = `holder-${id2}`;
+  const staged = `${lockPath2}.claim.${process.pid}.${id2}`;
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  mkdirSync(staged);
+  try {
+    writeFileSync(join(staged, owner), `${process.pid}
+${procStartToken(process.pid) ?? ""}`);
+    for (; ; ) {
+      try {
+        renameSync(staged, lockPath2);
+        return owner;
+      } catch (e) {
+        const code = e.code;
+        const occupied = code === "EEXIST" || code === "ENOTEMPTY";
+        const windowsOccupied = (code === "EPERM" || code === "EACCES") && existsSync(lockPath2);
+        if (!occupied && !windowsOccupied) throw e;
+      }
+      if (Date.now() >= deadline) throw new Error(`Timed out waiting for lock: ${lockPath2}`);
+      reclaimDeadOwner(lockPath2);
+      yield;
+    }
+  } finally {
+    rmSync(staged, { recursive: true, force: true });
+  }
+}
+function withCrossProcessLock(lockPath2, fn) {
+  const steps = acquireSteps(lockPath2);
+  let step = steps.next();
+  while (!step.done) {
+    sleep(50);
+    step = steps.next();
+  }
+  const owner = step.value;
+  try {
+    const result = fn();
+    if (result && typeof result.then === "function") {
+      return (async () => {
+        try {
+          return await result;
+        } finally {
+          release(lockPath2, owner);
+        }
+      })();
+    }
+    release(lockPath2, owner);
+    return result;
+  } catch (e) {
+    release(lockPath2, owner);
+    throw e;
+  }
+}
+
+// src/session.ts
+var root = join2(homedir(), ".pirate-radio");
+var directory;
+var scopeKey = "";
+var boundSession;
+var pi;
+function hostProcess() {
+  if (pi === void 0) pi = findPiProcess();
+  return pi;
+}
+function dataDir() {
+  if (directory) return directory;
+  const explicit = process.env.PIRATE_RADIO_SESSION?.trim();
+  const host = explicit ? null : hostProcess();
+  const key = explicit || (host ? `pi:${host.pid}:${host.token ?? ""}` : "");
+  scopeKey = key;
+  directory = key ? join2(root, "sessions", createHash("sha256").update(key).digest("hex").slice(0, 24)) : root;
+  return directory;
+}
+function readAnchor() {
+  try {
+    const a = JSON.parse(readFileSync3(join2(dataDir(), "anchor.json"), "utf8"));
+    if (Number.isInteger(a?.pid) && a.pid > 0 && (a.token == null || typeof a.token === "string")) {
+      return { pid: a.pid, token: a.token ?? null, sessionId: typeof a.sessionId === "string" ? a.sessionId : void 0 };
+    }
+  } catch {
+  }
+  return null;
+}
+function sessionId() {
+  return boundSession ??= readAnchor()?.sessionId ?? "legacy";
+}
+function clearAnchor(expected) {
+  const cur = readAnchor();
+  if (expected && (!cur || cur.pid !== expected.pid || cur.token !== expected.token || cur.sessionId !== expected.sessionId)) return;
+  try {
+    unlinkSync2(join2(dataDir(), "anchor.json"));
+  } catch {
+  }
+}
+function withSessionLock(fn) {
+  return withCrossProcessLock(join2(dataDir(), "session.lock"), fn);
+}
+function playerMarker(id2 = sessionId()) {
+  return `pirate-radio-${createHash("sha256").update(`${dataDir()}:${id2}`).digest("hex").slice(0, 24)}`;
+}
+function bindSession(id2) {
+  boundSession = id2;
+}
 
 // src/registry.ts
-var dir = join2(homedir(), ".pirate-radio");
-var regPath = join2(dir, "players.json");
-var lockPath = join2(dir, "players.lock");
+import {
+  readFileSync as readFileSync4,
+  writeFileSync as writeFileSync3,
+  renameSync as renameSync3,
+  mkdirSync as mkdirSync3,
+  existsSync as existsSync2
+} from "node:fs";
+import { join as join3 } from "node:path";
+var dir = dataDir();
+var regPath = join3(dir, "players.json");
+var lockPath = join3(dir, "players.lock");
 function readRaw() {
   if (!existsSync2(regPath)) return { players: [], watchdogs: [] };
   try {
-    const r = JSON.parse(readFileSync3(regPath, "utf8"));
+    const r = JSON.parse(readFileSync4(regPath, "utf8"));
     return { players: r.players ?? [], watchdogs: r.watchdogs ?? [] };
   } catch {
     return { players: [], watchdogs: [] };
   }
 }
 function writeRaw(r) {
-  mkdirSync2(dir, { recursive: true });
+  mkdirSync3(dir, { recursive: true });
   const tmp = `${regPath}.${process.pid}.tmp`;
-  writeFileSync2(tmp, JSON.stringify(r, null, 2));
-  renameSync2(tmp, regPath);
+  writeFileSync3(tmp, JSON.stringify(r, null, 2));
+  renameSync3(tmp, regPath);
 }
 function withLock(fn) {
   return withCrossProcessLock(lockPath, () => {
@@ -262,18 +393,21 @@ function withLock(fn) {
     return result;
   });
 }
-function livePlayers() {
+function livePlayers(id2 = sessionId()) {
   return withLock((r) => {
     r.players = prune(r.players);
-    return [...r.players];
+    return r.players.filter((e) => owned(e, id2));
   });
 }
-function drainAll() {
+function owned(entry, id2 = sessionId()) {
+  return (entry.sessionId ?? "legacy") === id2;
+}
+function drainAll(id2 = sessionId()) {
   return withLock((r) => {
-    const players = prune(r.players);
-    const watchdogs = prune(r.watchdogs);
-    r.players = [];
-    r.watchdogs = [];
+    const players = prune(r.players.filter((e) => owned(e, id2)));
+    const watchdogs = prune(r.watchdogs.filter((e) => owned(e, id2)));
+    r.players = r.players.filter((e) => !owned(e, id2));
+    r.watchdogs = r.watchdogs.filter((e) => !owned(e, id2));
     return { players, watchdogs };
   });
 }
@@ -281,186 +415,55 @@ function prune(list) {
   return list.filter((e) => sameProcess(e.pid, e.token));
 }
 
-// src/state.ts
-var stateDir = join3(homedir2(), ".pirate-radio");
-var stateFilePath = join3(stateDir, "state.json");
-var stateLockPath = join3(stateDir, "state.lock");
-var anchorPath = join3(stateDir, "anchor.json");
-var defaults = {
-  state: "stopped",
-  source: null,
-  genre: null,
-  stationName: null,
-  stationIndex: 0,
-  title: null,
-  volume: 80,
-  spotifyVerifier: null,
-  podcastFeed: null,
-  podcastName: null,
-  episodeIndex: 0
-};
-var now = { ...defaults };
-var inProcTail = Promise.resolve();
-function readAnchor() {
-  if (!existsSync3(anchorPath)) return null;
-  try {
-    const a = JSON.parse(readFileSync4(anchorPath, "utf8"));
-    if (typeof a.pid === "number" && a.pid > 0) {
-      return { pid: a.pid, token: a.token ?? null };
+// src/watchdog-loop.ts
+function startWatchdogLoop(pollMs, finish, exit) {
+  const timer = setInterval(() => {
+    try {
+      if (!finish()) return;
+      clearInterval(timer);
+      exit();
+    } catch {
     }
-  } catch {
-  }
-  return null;
-}
-function clearAnchor() {
-  try {
-    unlinkSync(anchorPath);
-  } catch {
-  }
-}
-
-// src/dynhosts.ts
-import { readFileSync as readFileSync6, writeFileSync as writeFileSync4, renameSync as renameSync4, mkdirSync as mkdirSync4, existsSync as existsSync4 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import { join as join5 } from "node:path";
-
-// src/stations.ts
-import { readFileSync as readFileSync5 } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname as dirname2, join as join4 } from "node:path";
-var here = dirname2(fileURLToPath(import.meta.url));
-var emptyCatalog = { version: 2, aliases: {}, genres: {} };
-var catalog = emptyCatalog;
-try {
-  const raw = JSON.parse(readFileSync5(join4(here, "..", "data", "stations.json"), "utf8"));
-  catalog = validateCatalog(raw);
-} catch (e) {
-  process.stderr.write(`radiohead: failed to load stations.json \u2014 ${e.message}
-`);
-}
-function nonEmpty(value) {
-  return typeof value === "string" && value.trim().length > 0;
-}
-function validateCatalog(value) {
-  if (!value || typeof value !== "object") throw new Error("catalog must be an object");
-  const raw = value;
-  if (raw.version !== 2) throw new Error(`unsupported catalog version: ${String(raw.version)}`);
-  if (!raw.aliases || typeof raw.aliases !== "object" || Array.isArray(raw.aliases))
-    throw new Error("aliases must be an object");
-  if (!raw.genres || typeof raw.genres !== "object" || Array.isArray(raw.genres))
-    throw new Error("genres must be an object");
-  const genres = {};
-  const seenUrls = /* @__PURE__ */ new Set();
-  for (const [id, candidate] of Object.entries(raw.genres)) {
-    if (!/^[a-z0-9-]+$/.test(id)) throw new Error(`invalid genre id: ${id}`);
-    if (!candidate || typeof candidate !== "object") throw new Error(`${id}: genre must be an object`);
-    const genre = candidate;
-    if (!nonEmpty(genre.label)) throw new Error(`${id}: label is required`);
-    if (!nonEmpty(genre.description)) throw new Error(`${id}: description is required`);
-    if (!Array.isArray(genre.stations) || genre.stations.length === 0)
-      throw new Error(`${id}: stations must be a non-empty array`);
-    const stations = genre.stations.map((candidateStation, index) => {
-      if (!candidateStation || typeof candidateStation !== "object")
-        throw new Error(`${id}[${index}]: station must be an object`);
-      const station = candidateStation;
-      if (!nonEmpty(station.name)) throw new Error(`${id}[${index}]: name is required`);
-      if (!nonEmpty(station.url)) throw new Error(`${id}[${index}]: url is required`);
-      let parsed;
-      try {
-        parsed = new URL(station.url);
-      } catch {
-        throw new Error(`${id}[${index}]: invalid URL`);
-      }
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
-        throw new Error(`${id}[${index}]: URL must be HTTP(S)`);
-      if (seenUrls.has(station.url)) throw new Error(`${id}[${index}]: duplicate URL ${station.url}`);
-      seenUrls.add(station.url);
-      return { name: station.name, url: station.url };
-    });
-    genres[id] = { label: genre.label, description: genre.description, stations };
-  }
-  const aliases = {};
-  for (const [alias, target] of Object.entries(raw.aliases)) {
-    if (!/^[a-z0-9-]+$/.test(alias) || !nonEmpty(target)) throw new Error(`invalid alias: ${alias}`);
-    if (genres[alias]) throw new Error(`alias conflicts with genre: ${alias}`);
-    if (!genres[target]) throw new Error(`alias ${alias} targets unknown genre ${target}`);
-    aliases[alias] = target;
-  }
-  return { version: 2, aliases, genres };
-}
-var hostCache = null;
-function hosts() {
-  if (hostCache) return hostCache;
-  const set = /* @__PURE__ */ new Set();
-  for (const genre of Object.values(catalog.genres)) {
-    for (const station of genre.stations) set.add(new URL(station.url).host.toLowerCase());
-  }
-  hostCache = [...set];
-  return hostCache;
-}
-
-// src/dynhosts.ts
-var dir2 = join5(homedir3(), ".pirate-radio");
-var path = join5(dir2, "dynamic-hosts.json");
-function dynamicHosts() {
-  if (!existsSync4(path)) return [];
-  try {
-    const arr = JSON.parse(readFileSync6(path, "utf8"));
-    return Array.isArray(arr) ? arr.filter((h) => typeof h === "string") : [];
-  } catch {
-    return [];
-  }
-}
-function sweepHosts() {
-  return lifecycleTestMode ? dynamicHosts() : [...hosts(), ...dynamicHosts()];
+  }, pollMs);
+  return timer;
 }
 
 // src/watchdog.ts
 var anchorPid = Number(process.argv[2]);
-var anchorToken = process.argv[3] ? process.argv[3] : null;
+var anchorToken = process.argv[3] || null;
 var playerPid = Number(process.argv[4]);
 var kind = process.argv[5] === "pid" ? "pid" : "file";
-if (!Number.isInteger(anchorPid) || !Number.isInteger(playerPid)) {
-  process.exit(1);
-}
-var anchor = { pid: anchorPid, token: anchorToken };
+var id = process.argv[6] || "legacy";
+var playerToken = process.argv[7] || procStartToken(playerPid);
+if (!Number.isInteger(anchorPid) || anchorPid <= 0 || !Number.isInteger(playerPid) || playerPid <= 0) process.exit(1);
+bindSession(id);
+var anchor = { pid: anchorPid, token: anchorToken, sessionId: id === "legacy" ? void 0 : id };
 function stillOurAnchor() {
   const cur = readAnchor();
-  return !!cur && cur.pid === anchor.pid && (cur.token ?? null) === (anchor.token ?? null);
+  return !!cur && cur.pid === anchor.pid && cur.token === anchor.token && cur.sessionId === anchor.sessionId;
 }
-function stopEverything() {
-  const { players, watchdogs } = drainAll();
-  for (const p of players) killPid(p.pid);
-  for (const w of watchdogs) {
-    if (w.pid !== process.pid) killPid(w.pid);
-  }
-  for (const pid of findOrphanPlayers(sweepHosts())) killPid(pid);
-  clearAnchor();
+function stopOwned() {
+  const { players, watchdogs } = drainAll(id);
+  for (const p of players) killSameProcess(p.pid, p.token);
+  for (const w of watchdogs) if (w.pid !== process.pid) killSameProcess(w.pid, w.token);
+  for (const pid of findOrphanPlayers(playerMarker(id))) killPid(pid);
 }
 var POLL_MS = lifecycleTestMode ? 50 : 3e3;
-var TOKEN_EVERY = 10;
 var tick = 0;
-var timer = setInterval(() => {
-  try {
-    tick++;
-    if (!pidAlive(playerPid) && livePlayers().length === 0) {
-      clearInterval(timer);
-      process.exit(0);
-    }
-    const cheapDead = !pidAlive(anchor.pid);
-    const reuseDead = !cheapDead && tick % TOKEN_EVERY === 0 && !sameProcess(anchor.pid, anchor.token);
-    if (cheapDead || reuseDead) {
-      clearInterval(timer);
-      if (kind === "pid") {
-        if (pidAlive(playerPid)) killPid(playerPid);
-        process.exit(0);
-      }
-      if (!stillOurAnchor()) {
-        process.exit(0);
-      }
-      stopEverything();
-      process.exit(0);
-    }
-  } catch {
+startWatchdogLoop(POLL_MS, () => {
+  tick++;
+  if (kind === "file" && !stillOurAnchor()) return true;
+  if (!pidAlive(playerPid) && livePlayers(id).length === 0) return true;
+  const dead = !pidAlive(anchorPid) || tick % 10 === 0 && !sameProcess(anchorPid, anchorToken);
+  if (!dead) return false;
+  if (kind === "pid") {
+    killSameProcess(playerPid, playerToken);
+    return true;
   }
-}, POLL_MS);
+  return withSessionLock(() => {
+    if (!stillOurAnchor()) return true;
+    stopOwned();
+    clearAnchor(anchor);
+    return true;
+  });
+}, () => process.exit(0));

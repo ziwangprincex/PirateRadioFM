@@ -2,8 +2,7 @@
 // pirate-radio argv entry. Invoked by each slash command as `node dist/cli.js <tool> [json-args]`.
 // This replaces the MCP stdio server for slash-command use: no protocol handshake,
 // no LLM tool selection — deterministic mapping from argv to a tool handler.
-import { tools } from "./tools.js";
-import { withState } from "./state.js";
+import { tools, runTool } from "./tools.js";
 import { parseArgs } from "./argparse.js";
 import { doctor } from "./doctor.js";
 
@@ -44,13 +43,9 @@ async function main(): Promise<void> {
   }
 
   try {
-    const out = await withState(() => tool.handler(args));
+    const out = await runTool(tool.name, args);
     process.stdout.write(out + "\n");
   } catch (e) {
-    // withState already persists partial mutations on throw (e.g. spotifyVerifier,
-    // volume). No fallback saveState() here — the old one re-entered the same lock
-    // and, because cli.ts never calls loadState(), would clobber state.json with
-    // pristine defaults if the lock timed out.
     console.error(`Error: ${(e as Error).message}`);
     process.exit(1);
   }

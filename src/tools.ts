@@ -1,3 +1,4 @@
+import { withBudget } from "./http.js";
 // Tool definitions + handlers. Registered on the MCP server in index.ts.
 import * as radio from "./sources/radio.js";
 import * as spotify from "./sources/spotify.js";
@@ -5,7 +6,7 @@ import * as podcast from "./sources/podcast.js";
 import * as applemusic from "./sources/applemusic.js";
 import * as hoer from "./sources/hoer.js";
 import * as player from "./player.js";
-import { now, describe } from "./state.js";
+import { now, describe, playbackEffect, withState } from "./state.js";
 import { doctor } from "./doctor.js";
 
 type Handler = (args: any) => Promise<string> | string;
@@ -35,8 +36,8 @@ export const tools: Tool[] = [
     description: "Next station (radio), next track (Spotify/Apple Music), or next-older episode (podcast).",
     schema: noArgs,
     handler: async () => {
-      if (now.source === "spotify") { await spotify.skipNext(); return "Next track."; }
-      if (now.source === "applemusic") { applemusic.next(); return "Next track."; }
+      if (now.source === "spotify") { await playbackEffect(() => spotify.skipNext()); return "Next track."; }
+      if (now.source === "applemusic") { await playbackEffect(() => applemusic.next()); return "Next track."; }
       if (now.source === "podcast") return podcast.next();
       if (now.source === "hoer") throw new Error("HÖR is a single live channel — nothing to skip to.");
       const st = await radio.next();
@@ -48,8 +49,8 @@ export const tools: Tool[] = [
     description: "Previous station (radio), previous track (Spotify/Apple Music), or next-newer episode (podcast).",
     schema: noArgs,
     handler: async () => {
-      if (now.source === "spotify") { await spotify.skipPrev(); return "Previous track."; }
-      if (now.source === "applemusic") { applemusic.prev(); return "Previous track."; }
+      if (now.source === "spotify") { await playbackEffect(() => spotify.skipPrev()); return "Previous track."; }
+      if (now.source === "applemusic") { await playbackEffect(() => applemusic.prev()); return "Previous track."; }
       if (now.source === "podcast") return podcast.prev();
       if (now.source === "hoer") throw new Error("HÖR is a single live channel — nothing to skip to.");
       const st = await radio.prev();
@@ -58,7 +59,7 @@ export const tools: Tool[] = [
   },
   {
     name: "radio_pause",
-    description: "Pause playback (radio/podcast: stops the stream; Spotify/Apple Music: pauses the app).",
+    description: "Pause playback in place via mpv IPC or the remote app; ffplay requires stop instead.",
     schema: noArgs,
     handler: async () => {
       if (now.state === "stopped" && !now.source) {
@@ -72,23 +73,26 @@ export const tools: Tool[] = [
         now.state = "stopped";
         return "Stopped.";
       }
-      // Reflect the user's INTENT in state even if the underlying call fails —
-      // otherwise a Spotify network hiccup leaves now.state stuck at "playing"
-      // and radio_now_playing lies.
-      if (now.source === "spotify") { try { await spotify.pause(); } catch { /* keep going */ } }
-      else if (now.source === "applemusic") { try { applemusic.pause(); } catch { /* keep going */ } }
-      else player.stop();
+      // Persist paused state only after the player acknowledged the command.
+      if (now.source === "spotify") await spotify.pause();
+      else if (now.source === "applemusic") applemusic.pause();
+      else if (!(await player.setPaused(true))) throw new Error("No live player to pause. Use radio_resume to restart.");
       now.state = "paused";
       return "|| Paused.";
     },
   },
   {
     name: "radio_resume",
-    description: "Resume playback (a paused podcast restarts its episode from the top).",
+    description: "Resume a live mpv player at its saved position; restart only if the player has exited.",
     schema: noArgs,
     handler: async () => {
-      if (now.source === "spotify") await spotify.resume();
-      else if (now.source === "applemusic") applemusic.resume();
+      if (["radio", "podcast", "hoer"].includes(now.source ?? "") &&
+          await playbackEffect(() => player.setPaused(false))) {
+        now.state = "playing";
+        return "> Resumed at the current position.";
+      }
+      if (now.source === "spotify") await playbackEffect(() => spotify.resume());
+      else if (now.source === "applemusic") await playbackEffect(() => applemusic.resume());
       else if (now.source === "podcast") return podcast.resume();
       else if (now.source === "hoer") return hoer.resume();
       else if (now.source === "radio" && now.genre) await radio.playGenre(now.genre, now.stationIndex);
@@ -102,10 +106,8 @@ export const tools: Tool[] = [
     description: "Stop playback entirely.",
     schema: noArgs,
     handler: async () => {
-      // Same rationale as radio_pause: user asked to stop, respect that in
-      // state regardless of whether the remote call succeeded.
-      if (now.source === "spotify") { try { await spotify.pause(); } catch { /* keep going */ } }
-      else if (now.source === "applemusic") { try { applemusic.stop(); } catch { /* keep going */ } }
+      if (now.source === "spotify") await spotify.pause();
+      else if (now.source === "applemusic") applemusic.stop();
       else player.stop();
       now.state = "stopped";
       now.source = null;
@@ -130,7 +132,7 @@ export const tools: Tool[] = [
   },
   {
     name: "radio_volume",
-    description: "Set volume 0-100 (applies to radio; restarts the current stream).",
+    description: "Set volume 0-100 without restarting mpv; ffplay requires mpv for live volume control.",
     schema: { type: "object", properties: { level: { type: "number", minimum: 0, maximum: 100 } }, required: ["level"] },
     handler: async (a) => {
       // Reject missing/non-numeric input up front. Be stricter than Number():
@@ -143,18 +145,12 @@ export const tools: Tool[] = [
             : NaN;
       if (!Number.isFinite(level)) throw new Error("Give a volume 0-100, e.g. level=60.");
       now.volume = Math.max(0, Math.min(100, Math.round(level)));
-      if (now.source === "radio" && now.state === "playing" && now.genre)
-        await radio.playGenre(now.genre, now.stationIndex);
-      else if (now.source === "podcast" && now.state === "playing")
-        await podcast.resume(); // restart the episode at the new volume, like radio
-      else if (now.source === "hoer" && now.state === "playing")
-        await hoer.resume(); // re-resolve and restart the stream at the new volume
+      if (["radio", "podcast", "hoer"].includes(now.source ?? "") && now.state !== "stopped")
+        await player.setVolume(now.volume);
       else if (now.source === "spotify" && now.state === "playing") {
-        // Best-effort: user's intent is to change volume, so recording it in
-        // state should stick even if the remote device call fails.
-        try { await spotify.setVolume(now.volume); } catch { /* keep going */ }
+        await spotify.setVolume(now.volume);
       } else if (now.source === "applemusic" && now.state === "playing") {
-        try { applemusic.setVolume(now.volume); } catch { /* keep going */ }
+        applemusic.setVolume(now.volume);
       }
       return `vol ${now.volume}`;
     },
@@ -190,7 +186,7 @@ export const tools: Tool[] = [
       // rewrites it, silence Music only after Spotify committed.
       const wasAppleMusic = now.source === "applemusic";
       const out = await spotify.playContext(String(a.target));
-      if (wasAppleMusic) applemusic.pauseIfRunning();
+      if (wasAppleMusic) await playbackEffect(() => applemusic.pauseIfRunning());
       return out;
     },
   },
@@ -249,3 +245,13 @@ export const tools: Tool[] = [
     handler: () => doctor(),
   },
 ];
+
+const mutations = new Set(["radio_play", "radio_next", "radio_prev", "radio_pause", "radio_resume", "radio_stop", "radio_volume", "podcast_play", "hoer_play", "music_play", "spotify_play_playlist", "spotify_transfer"]);
+const directEffects = new Set(["radio_pause", "radio_stop", "radio_volume", "spotify_transfer"]);
+export async function runTool(name: string, args: unknown = {}, signal?: AbortSignal): Promise<string> {
+  const tool = tools.find((t) => t.name === name);
+  if (!tool) throw new Error(`Unknown tool: ${name}`);
+  return withBudget(() => withState(() => directEffects.has(name)
+    ? playbackEffect(() => tool.handler(args))
+    : tool.handler(args), mutations.has(name)), signal);
+}

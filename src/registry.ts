@@ -18,7 +18,7 @@ import {
   mkdirSync,
   existsSync,
 } from "node:fs";
-import { homedir } from "node:os";
+import { dataDir, sessionId } from "./session.js";
 import { join } from "node:path";
 import { sameProcess, procStartToken } from "./proc.js";
 import { withCrossProcessLock } from "./lock.js";
@@ -26,6 +26,9 @@ import { withCrossProcessLock } from "./lock.js";
 export interface ProcEntry {
   pid: number;
   token: string | null; // start-time fingerprint captured at spawn (PID-reuse guard)
+  sessionId?: string;
+  ipc?: string;
+  player?: "mpv" | "ffplay";
   host?: string;         // stream host, for diagnostics
 }
 interface Registry {
@@ -33,7 +36,7 @@ interface Registry {
   watchdogs: ProcEntry[];
 }
 
-const dir = join(homedir(), ".pirate-radio");
+const dir = dataDir();
 const regPath = join(dir, "players.json");
 const lockPath = join(dir, "players.lock");
 
@@ -75,11 +78,11 @@ export function withLock<T>(fn: (r: Registry) => T): T {
 // --- public API (all lock-guarded) -----------------------------------------
 
 // Record a freshly spawned player. Captures its start token for reuse-safety.
-export function addPlayer(pid: number, host?: string): void {
+export function addPlayer(pid: number, host?: string, metadata: Partial<ProcEntry> = {}): void {
   const token = procStartToken(pid);
   withLock((r) => {
     r.players = prune(r.players);
-    r.players.push({ pid, token, host });
+    r.players.push({ ...metadata, pid, token, host, sessionId: sessionId() });
   });
 }
 
@@ -87,15 +90,15 @@ export function addWatchdog(pid: number): void {
   const token = procStartToken(pid);
   withLock((r) => {
     r.watchdogs = prune(r.watchdogs);
-    r.watchdogs.push({ pid, token });
+    r.watchdogs.push({ pid, token, sessionId: sessionId() });
   });
 }
 
 // Snapshot of currently-live players (reuse-verified).
-export function livePlayers(): ProcEntry[] {
+export function livePlayers(id = sessionId()): ProcEntry[] {
   return withLock((r) => {
     r.players = prune(r.players);
-    return [...r.players];
+    return r.players.filter((e) => owned(e, id));
   });
 }
 
@@ -105,7 +108,7 @@ export function livePlayers(): ProcEntry[] {
 // prune() call still filters dead / recycled pids using the start-token check.
 export function livePlayerCountUnlocked(): number {
   try {
-    return prune(readRaw().players).length;
+    return prune(readRaw().players).filter((e) => owned(e)).length;
   } catch {
     return 0;
   }
@@ -121,29 +124,29 @@ export function removeWatchdog(pid: number): void {
   withLock((r) => { r.watchdogs = r.watchdogs.filter((e) => e.pid !== pid); });
 }
 
-// Remove entries and hand them back so the caller can kill them under no lock.
-export function drainPlayers(): ProcEntry[] {
+export function owned(entry: ProcEntry, id = sessionId()): boolean {
+  return (entry.sessionId ?? "legacy") === id;
+}
+export function drainPlayers(id = sessionId()): ProcEntry[] {
   return withLock((r) => {
-    const live = prune(r.players);
-    r.players = [];
-    return live;
+    const mine = prune(r.players.filter((e) => owned(e, id)));
+    r.players = r.players.filter((e) => !owned(e, id));
+    return mine;
   });
 }
-
-export function drainWatchdogs(): ProcEntry[] {
+export function drainWatchdogs(id = sessionId()): ProcEntry[] {
   return withLock((r) => {
-    const live = prune(r.watchdogs);
-    r.watchdogs = [];
-    return live;
+    const mine = prune(r.watchdogs.filter((e) => owned(e, id)));
+    r.watchdogs = r.watchdogs.filter((e) => !owned(e, id));
+    return mine;
   });
 }
-
-export function drainAll(): { players: ProcEntry[]; watchdogs: ProcEntry[] } {
+export function drainAll(id = sessionId()): Registry {
   return withLock((r) => {
-    const players = prune(r.players);
-    const watchdogs = prune(r.watchdogs);
-    r.players = [];
-    r.watchdogs = [];
+    const players = prune(r.players.filter((e) => owned(e, id)));
+    const watchdogs = prune(r.watchdogs.filter((e) => owned(e, id)));
+    r.players = r.players.filter((e) => !owned(e, id));
+    r.watchdogs = r.watchdogs.filter((e) => !owned(e, id));
     return { players, watchdogs };
   });
 }

@@ -5,7 +5,7 @@
 // that's a MusicKit-web-only capability, useless from a CLI.
 // First run triggers macOS's one-time Automation permission prompt.
 import { execFileSync } from "node:child_process";
-import { now } from "../state.js";
+import { now, playbackEffect } from "../state.js";
 import { stop as stopLocal } from "../player.js";
 import * as spotify from "./spotify.js";
 
@@ -35,40 +35,42 @@ export async function play(target: string): Promise<string> {
   assertMac();
   const t = escapeAS(target.trim());
   if (!t) throw new Error("Give me a playlist, song, or album name from your Music library.");
-  // Silence the other sources first (best effort): local mpv/ffplay always;
-  // Spotify only if it was the active source, since pause() needs login+device.
-  stopLocal();
-  if (now.source === "spotify") {
-    try { await spotify.pause(); } catch { /* best effort */ }
-  }
-  const attempts: Array<{ script: string; kind: string }> = [
-    { script: `tell application "Music" to play playlist "${t}"`, kind: "playlist" },
-    { script: `tell application "Music" to play (first track of library playlist 1 whose name contains "${t}")`, kind: "track" },
-    { script: `tell application "Music" to play (first track of library playlist 1 whose album contains "${t}")`, kind: "album" },
-  ];
-  let played: string | null = null;
-  for (const a of attempts) {
-    try {
-      osa(a.script);
-      played = a.kind;
-      break;
-    } catch {
-      /* not found under this kind — try the next */
+  return playbackEffect(async () => {
+    // Silence the other sources first (best effort): local mpv/ffplay always;
+    // Spotify only if it was the active source, since pause() needs login+device.
+    stopLocal();
+    if (now.source === "spotify") {
+      try { await spotify.pause(); } catch { /* best effort */ }
     }
-  }
-  if (!played)
-    throw new Error(
-      `Nothing in your Music library matches "${target}". AppleScript can only play ` +
-        `what's already in the library — add it in Music.app first.`,
-    );
-  // current track may not be queryable in the instant after `play` — fall back
-  // to what the user asked for rather than failing the whole call.
-  let title = target;
-  try { title = nowPlayingLine(); } catch { /* keep the requested name */ }
-  now.state = "playing";
-  now.source = "applemusic";
-  now.title = title;
-  return `> Apple Music (${played}): ${title}`;
+    const attempts: Array<{ script: string; kind: string }> = [
+      { script: `tell application "Music" to play playlist "${t}"`, kind: "playlist" },
+      { script: `tell application "Music" to play (first track of library playlist 1 whose name contains "${t}")`, kind: "track" },
+      { script: `tell application "Music" to play (first track of library playlist 1 whose album contains "${t}")`, kind: "album" },
+    ];
+    let played: string | null = null;
+    for (const a of attempts) {
+      try {
+        osa(a.script);
+        played = a.kind;
+        break;
+      } catch {
+        /* not found under this kind — try the next */
+      }
+    }
+    if (!played)
+      throw new Error(
+        `Nothing in your Music library matches "${target}". AppleScript can only play ` +
+          `what's already in the library — add it in Music.app first.`,
+      );
+    // current track may not be queryable in the instant after `play` — fall back
+    // to what the user asked for rather than failing the whole call.
+    let title = target;
+    try { title = nowPlayingLine(); } catch { /* keep the requested name */ }
+    now.state = "playing";
+    now.source = "applemusic";
+    now.title = title;
+    return `> Apple Music (${played}): ${title}`;
+  });
 }
 
 // Pause Music.app WITHOUT launching it if it isn't running — a bare

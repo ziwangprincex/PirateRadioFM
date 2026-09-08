@@ -1764,7 +1764,7 @@ var require_code2 = __commonJS({
       return allSchemaProperties(schemaMap).filter((p) => !(0, util_1.alwaysValidSchema)(it, schemaMap[p]));
     }
     exports.schemaProperties = schemaProperties;
-    function callValidateCode({ schemaCode, data, it: { gen, topSchemaRef, schemaPath, errorPath }, it }, func, context, passSchema) {
+    function callValidateCode({ schemaCode, data, it: { gen, topSchemaRef, schemaPath, errorPath }, it }, func, context2, passSchema) {
       const dataAndSchema = passSchema ? (0, codegen_1._)`${schemaCode}, ${data}, ${topSchemaRef}${schemaPath}` : data;
       const valCxt = [
         [names_1.default.instancePath, (0, codegen_1.strConcat)(names_1.default.instancePath, errorPath)],
@@ -1775,7 +1775,7 @@ var require_code2 = __commonJS({
       if (it.opts.dynamicRef)
         valCxt.push([names_1.default.dynamicAnchors, names_1.default.dynamicAnchors]);
       const args = (0, codegen_1._)`${dataAndSchema}, ${gen.object(...valCxt)}`;
-      return context !== codegen_1.nil ? (0, codegen_1._)`${func}.call(${context}, ${args})` : (0, codegen_1._)`${func}(${args})`;
+      return context2 !== codegen_1.nil ? (0, codegen_1._)`${func}.call(${context2}, ${args})` : (0, codegen_1._)`${func}(${args})`;
     }
     exports.callValidateCode = callValidateCode;
     var newRegExp = (0, codegen_1._)`new RegExp`;
@@ -2979,22 +2979,22 @@ var require_compile = __commonJS({
       }
     }
     exports.compileSchema = compileSchema;
-    function resolveRef(root, baseId, ref) {
+    function resolveRef(root2, baseId, ref) {
       var _a3;
       ref = (0, resolve_1.resolveUrl)(this.opts.uriResolver, baseId, ref);
-      const schOrFunc = root.refs[ref];
+      const schOrFunc = root2.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve.call(this, root, ref);
+      let _sch = resolve.call(this, root2, ref);
       if (_sch === void 0) {
-        const schema = (_a3 = root.localRefs) === null || _a3 === void 0 ? void 0 : _a3[ref];
+        const schema = (_a3 = root2.localRefs) === null || _a3 === void 0 ? void 0 : _a3[ref];
         const { schemaId } = this.opts;
         if (schema)
-          _sch = new SchemaEnv({ schema, schemaId, root, baseId });
+          _sch = new SchemaEnv({ schema, schemaId, root: root2, baseId });
       }
       if (_sch === void 0)
         return;
-      return root.refs[ref] = inlineOrCompile.call(this, _sch);
+      return root2.refs[ref] = inlineOrCompile.call(this, _sch);
     }
     exports.resolveRef = resolveRef;
     function inlineOrCompile(sch) {
@@ -3012,23 +3012,23 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve(root, ref) {
+    function resolve(root2, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
-      return sch || this.schemas[ref] || resolveSchema.call(this, root, ref);
+      return sch || this.schemas[ref] || resolveSchema.call(this, root2, ref);
     }
-    function resolveSchema(root, ref) {
+    function resolveSchema(root2, ref) {
       const p = this.opts.uriResolver.parse(ref);
       const refPath = (0, resolve_1._getFullPath)(this.opts.uriResolver, p);
-      let baseId = (0, resolve_1.getFullPath)(this.opts.uriResolver, root.baseId, void 0);
-      if (Object.keys(root.schema).length > 0 && refPath === baseId) {
-        return getJsonPointer.call(this, p, root);
+      let baseId = (0, resolve_1.getFullPath)(this.opts.uriResolver, root2.baseId, void 0);
+      if (Object.keys(root2.schema).length > 0 && refPath === baseId) {
+        return getJsonPointer.call(this, p, root2);
       }
       const id = (0, resolve_1.normalizeId)(refPath);
       const schOrRef = this.refs[id] || this.schemas[id];
       if (typeof schOrRef == "string") {
-        const sch = resolveSchema.call(this, root, schOrRef);
+        const sch = resolveSchema.call(this, root2, schOrRef);
         if (typeof (sch === null || sch === void 0 ? void 0 : sch.schema) !== "object")
           return;
         return getJsonPointer.call(this, p, sch);
@@ -3043,7 +3043,7 @@ var require_compile = __commonJS({
         const schId = schema[schemaId];
         if (schId)
           baseId = (0, resolve_1.resolveUrl)(this.opts.uriResolver, baseId, schId);
-        return new SchemaEnv({ schema, schemaId, root, baseId });
+        return new SchemaEnv({ schema, schemaId, root: root2, baseId });
       }
       return getJsonPointer.call(this, p, schOrRef);
     }
@@ -3055,7 +3055,7 @@ var require_compile = __commonJS({
       "dependencies",
       "definitions"
     ]);
-    function getJsonPointer(parsedRef, { baseId, schema, root }) {
+    function getJsonPointer(parsedRef, { baseId, schema, root: root2 }) {
       var _a3;
       if (((_a3 = parsedRef.fragment) === null || _a3 === void 0 ? void 0 : _a3[0]) !== "/")
         return;
@@ -3074,10 +3074,10 @@ var require_compile = __commonJS({
       let env;
       if (typeof schema != "boolean" && schema.$ref && !(0, util_1.schemaHasRulesButRef)(schema, this.RULES)) {
         const $ref = (0, resolve_1.resolveUrl)(this.opts.uriResolver, baseId, schema.$ref);
-        env = resolveSchema.call(this, root, $ref);
+        env = resolveSchema.call(this, root2, $ref);
       }
       const { schemaId } = this.opts;
-      env = env || new SchemaEnv({ schema, schemaId, root, baseId });
+      env = env || new SchemaEnv({ schema, schemaId, root: root2, baseId });
       if (env.schema !== env.root.schema)
         return env;
       return void 0;
@@ -4206,8 +4206,8 @@ var require_core = __commonJS({
           keyRef = sch;
         if (sch === void 0) {
           const { schemaId } = this.opts;
-          const root = new compile_1.SchemaEnv({ schema: {}, schemaId });
-          sch = compile_1.resolveSchema.call(this, root, keyRef);
+          const root2 = new compile_1.SchemaEnv({ schema: {}, schemaId });
+          sch = compile_1.resolveSchema.call(this, root2, keyRef);
           if (!sch)
             return;
           this.refs[keyRef] = sch;
@@ -4568,20 +4568,20 @@ var require_ref = __commonJS({
       code(cxt) {
         const { gen, schema: $ref, it } = cxt;
         const { baseId, schemaEnv: env, validateName, opts, self } = it;
-        const { root } = env;
-        if (($ref === "#" || $ref === "#/") && baseId === root.baseId)
+        const { root: root2 } = env;
+        if (($ref === "#" || $ref === "#/") && baseId === root2.baseId)
           return callRootRef();
-        const schOrEnv = compile_1.resolveRef.call(self, root, baseId, $ref);
+        const schOrEnv = compile_1.resolveRef.call(self, root2, baseId, $ref);
         if (schOrEnv === void 0)
           throw new ref_error_1.default(it.opts.uriResolver, baseId, $ref);
         if (schOrEnv instanceof compile_1.SchemaEnv)
           return callValidate(schOrEnv);
         return inlineRefSchema(schOrEnv);
         function callRootRef() {
-          if (env === root)
+          if (env === root2)
             return callRef(cxt, validateName, env, env.$async);
-          const rootName = gen.scopeValue("root", { ref: root });
-          return callRef(cxt, (0, codegen_1._)`${rootName}.validate`, root, root.$async);
+          const rootName = gen.scopeValue("root", { ref: root2 });
+          return callRef(cxt, (0, codegen_1._)`${rootName}.validate`, root2, root2.$async);
         }
         function callValidate(sch) {
           const v = getValidate(cxt, sch);
@@ -10543,8 +10543,8 @@ function process2(schema, ctx, _params = { path: [], schemaPath: [] }) {
   return _result.schema;
 }
 function extractDefs(ctx, schema) {
-  const root = ctx.seen.get(schema);
-  if (!root)
+  const root2 = ctx.seen.get(schema);
+  if (!root2)
     throw new Error("Unprocessed schema. This is a bug in Zod.");
   const idToSchema = /* @__PURE__ */ new Map();
   for (const entry of ctx.seen.entries()) {
@@ -10569,7 +10569,7 @@ function extractDefs(ctx, schema) {
       entry[1].defId = id;
       return { defId: id, ref: `${uriGenerator("__shared")}#/${defsSegment}/${id}` };
     }
-    if (entry[1] === root) {
+    if (entry[1] === root2) {
       return { ref: "#" };
     }
     const uriPrefix = `#`;
@@ -10633,8 +10633,8 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
   }
 }
 function finalize(ctx, schema) {
-  const root = ctx.seen.get(schema);
-  if (!root)
+  const root2 = ctx.seen.get(schema);
+  if (!root2)
     throw new Error("Unprocessed schema. This is a bug in Zod.");
   const flattenRef = (zodSchema) => {
     const seen = ctx.seen.get(zodSchema);
@@ -10717,7 +10717,7 @@ function finalize(ctx, schema) {
       throw new Error("Schema is missing an `id` property");
     result.$id = ctx.external.uri(id);
   }
-  Object.assign(result, root.def ?? root.schema);
+  Object.assign(result, root2.def ?? root2.schema);
   const rootMetaId = ctx.metadataRegistry.get(schema)?.id;
   if (rootMetaId !== void 0 && result.id === rootMetaId)
     delete result.id;
@@ -13737,8 +13737,8 @@ var Protocol = class {
     this._taskStore = _options?.taskStore;
     this._taskMessageQueue = _options?.taskMessageQueue;
     if (this._taskStore) {
-      this.setRequestHandler(GetTaskRequestSchema, async (request, extra) => {
-        const task = await this._taskStore.getTask(request.params.taskId, extra.sessionId);
+      this.setRequestHandler(GetTaskRequestSchema, async (request2, extra) => {
+        const task = await this._taskStore.getTask(request2.params.taskId, extra.sessionId);
         if (!task) {
           throw new McpError(ErrorCode.InvalidParams, "Failed to retrieve task: Task not found");
         }
@@ -13746,9 +13746,9 @@ var Protocol = class {
           ...task
         };
       });
-      this.setRequestHandler(GetTaskPayloadRequestSchema, async (request, extra) => {
+      this.setRequestHandler(GetTaskPayloadRequestSchema, async (request2, extra) => {
         const handleTaskResult = async () => {
-          const taskId = request.params.taskId;
+          const taskId = request2.params.taskId;
           if (this._taskMessageQueue) {
             let queuedMessage;
             while (queuedMessage = await this._taskMessageQueue.dequeue(taskId, extra.sessionId)) {
@@ -13799,9 +13799,9 @@ var Protocol = class {
         };
         return await handleTaskResult();
       });
-      this.setRequestHandler(ListTasksRequestSchema, async (request, extra) => {
+      this.setRequestHandler(ListTasksRequestSchema, async (request2, extra) => {
         try {
-          const { tasks, nextCursor } = await this._taskStore.listTasks(request.params?.cursor, extra.sessionId);
+          const { tasks, nextCursor } = await this._taskStore.listTasks(request2.params?.cursor, extra.sessionId);
           return {
             tasks,
             nextCursor,
@@ -13811,20 +13811,20 @@ var Protocol = class {
           throw new McpError(ErrorCode.InvalidParams, `Failed to list tasks: ${error2 instanceof Error ? error2.message : String(error2)}`);
         }
       });
-      this.setRequestHandler(CancelTaskRequestSchema, async (request, extra) => {
+      this.setRequestHandler(CancelTaskRequestSchema, async (request2, extra) => {
         try {
-          const task = await this._taskStore.getTask(request.params.taskId, extra.sessionId);
+          const task = await this._taskStore.getTask(request2.params.taskId, extra.sessionId);
           if (!task) {
-            throw new McpError(ErrorCode.InvalidParams, `Task not found: ${request.params.taskId}`);
+            throw new McpError(ErrorCode.InvalidParams, `Task not found: ${request2.params.taskId}`);
           }
           if (isTerminal(task.status)) {
             throw new McpError(ErrorCode.InvalidParams, `Cannot cancel task in terminal status: ${task.status}`);
           }
-          await this._taskStore.updateTaskStatus(request.params.taskId, "cancelled", "Client cancelled task execution.", extra.sessionId);
-          this._clearTaskQueue(request.params.taskId);
-          const cancelledTask = await this._taskStore.getTask(request.params.taskId, extra.sessionId);
+          await this._taskStore.updateTaskStatus(request2.params.taskId, "cancelled", "Client cancelled task execution.", extra.sessionId);
+          this._clearTaskQueue(request2.params.taskId);
+          const cancelledTask = await this._taskStore.getTask(request2.params.taskId, extra.sessionId);
           if (!cancelledTask) {
-            throw new McpError(ErrorCode.InvalidParams, `Task not found after cancellation: ${request.params.taskId}`);
+            throw new McpError(ErrorCode.InvalidParams, `Task not found after cancellation: ${request2.params.taskId}`);
           }
           return {
             _meta: {},
@@ -13945,14 +13945,14 @@ var Protocol = class {
     }
     Promise.resolve().then(() => handler(notification)).catch((error2) => this._onerror(new Error(`Uncaught error in notification handler: ${error2}`)));
   }
-  _onrequest(request, extra) {
-    const handler = this._requestHandlers.get(request.method) ?? this.fallbackRequestHandler;
+  _onrequest(request2, extra) {
+    const handler = this._requestHandlers.get(request2.method) ?? this.fallbackRequestHandler;
     const capturedTransport = this._transport;
-    const relatedTaskId = request.params?._meta?.[RELATED_TASK_META_KEY]?.taskId;
+    const relatedTaskId = request2.params?._meta?.[RELATED_TASK_META_KEY]?.taskId;
     if (handler === void 0) {
       const errorResponse = {
         jsonrpc: "2.0",
-        id: request.id,
+        id: request2.id,
         error: {
           code: ErrorCode.MethodNotFound,
           message: "Method not found"
@@ -13970,17 +13970,17 @@ var Protocol = class {
       return;
     }
     const abortController = new AbortController();
-    this._requestHandlerAbortControllers.set(request.id, abortController);
-    const taskCreationParams = isTaskAugmentedRequestParams(request.params) ? request.params.task : void 0;
-    const taskStore = this._taskStore ? this.requestTaskStore(request, capturedTransport?.sessionId) : void 0;
+    this._requestHandlerAbortControllers.set(request2.id, abortController);
+    const taskCreationParams = isTaskAugmentedRequestParams(request2.params) ? request2.params.task : void 0;
+    const taskStore = this._taskStore ? this.requestTaskStore(request2, capturedTransport?.sessionId) : void 0;
     const fullExtra = {
       signal: abortController.signal,
       sessionId: capturedTransport?.sessionId,
-      _meta: request.params?._meta,
+      _meta: request2.params?._meta,
       sendNotification: async (notification) => {
         if (abortController.signal.aborted)
           return;
-        const notificationOptions = { relatedRequestId: request.id };
+        const notificationOptions = { relatedRequestId: request2.id };
         if (relatedTaskId) {
           notificationOptions.relatedTask = { taskId: relatedTaskId };
         }
@@ -13990,7 +13990,7 @@ var Protocol = class {
         if (abortController.signal.aborted) {
           throw new McpError(ErrorCode.ConnectionClosed, "Request was cancelled");
         }
-        const requestOptions = { ...options, relatedRequestId: request.id };
+        const requestOptions = { ...options, relatedRequestId: request2.id };
         if (relatedTaskId && !requestOptions.relatedTask) {
           requestOptions.relatedTask = { taskId: relatedTaskId };
         }
@@ -14001,7 +14001,7 @@ var Protocol = class {
         return await this.request(r, resultSchema, requestOptions);
       },
       authInfo: extra?.authInfo,
-      requestId: request.id,
+      requestId: request2.id,
       requestInfo: extra?.requestInfo,
       taskId: relatedTaskId,
       taskStore,
@@ -14011,16 +14011,16 @@ var Protocol = class {
     };
     Promise.resolve().then(() => {
       if (taskCreationParams) {
-        this.assertTaskHandlerCapability(request.method);
+        this.assertTaskHandlerCapability(request2.method);
       }
-    }).then(() => handler(request, fullExtra)).then(async (result) => {
+    }).then(() => handler(request2, fullExtra)).then(async (result) => {
       if (abortController.signal.aborted) {
         return;
       }
       const response = {
         result,
         jsonrpc: "2.0",
-        id: request.id
+        id: request2.id
       };
       if (relatedTaskId && this._taskMessageQueue) {
         await this._enqueueTaskMessage(relatedTaskId, {
@@ -14037,7 +14037,7 @@ var Protocol = class {
       }
       const errorResponse = {
         jsonrpc: "2.0",
-        id: request.id,
+        id: request2.id,
         error: {
           code: Number.isSafeInteger(error2["code"]) ? error2["code"] : ErrorCode.InternalError,
           message: error2.message ?? "Internal error",
@@ -14054,8 +14054,8 @@ var Protocol = class {
         await capturedTransport?.send(errorResponse);
       }
     }).catch((error2) => this._onerror(new Error(`Failed to send response: ${error2}`))).finally(() => {
-      if (this._requestHandlerAbortControllers.get(request.id) === abortController) {
-        this._requestHandlerAbortControllers.delete(request.id);
+      if (this._requestHandlerAbortControllers.get(request2.id) === abortController) {
+        this._requestHandlerAbortControllers.delete(request2.id);
       }
     });
   }
@@ -14159,11 +14159,11 @@ var Protocol = class {
    *
    * @experimental Use `client.experimental.tasks.requestStream()` to access this method.
    */
-  async *requestStream(request, resultSchema, options) {
+  async *requestStream(request2, resultSchema, options) {
     const { task } = options ?? {};
     if (!task) {
       try {
-        const result = await this.request(request, resultSchema, options);
+        const result = await this.request(request2, resultSchema, options);
         yield { type: "result", result };
       } catch (error2) {
         yield {
@@ -14175,7 +14175,7 @@ var Protocol = class {
     }
     let taskId;
     try {
-      const createResult = await this.request(request, CreateTaskResultSchema, options);
+      const createResult = await this.request(request2, CreateTaskResultSchema, options);
       if (createResult.task) {
         taskId = createResult.task.taskId;
         yield { type: "taskCreated", task: createResult.task };
@@ -14223,7 +14223,7 @@ var Protocol = class {
    *
    * Do not use this method to emit notifications! Use notification() instead.
    */
-  request(request, resultSchema, options) {
+  request(request2, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
     return new Promise((resolve, reject) => {
       const earlyReject = (error2) => {
@@ -14235,9 +14235,9 @@ var Protocol = class {
       }
       if (this._options?.enforceStrictCapabilities === true) {
         try {
-          this.assertCapabilityForMethod(request.method);
+          this.assertCapabilityForMethod(request2.method);
           if (task) {
-            this.assertTaskCapability(request.method);
+            this.assertTaskCapability(request2.method);
           }
         } catch (e) {
           earlyReject(e);
@@ -14247,16 +14247,16 @@ var Protocol = class {
       options?.signal?.throwIfAborted();
       const messageId = this._requestMessageId++;
       const jsonrpcRequest = {
-        ...request,
+        ...request2,
         jsonrpc: "2.0",
         id: messageId
       };
       if (options?.onprogress) {
         this._progressHandlers.set(messageId, options.onprogress);
         jsonrpcRequest.params = {
-          ...request.params,
+          ...request2.params,
           _meta: {
-            ...request.params?._meta || {},
+            ...request2.params?._meta || {},
             progressToken: messageId
           }
         };
@@ -14460,8 +14460,8 @@ var Protocol = class {
   setRequestHandler(requestSchema, handler) {
     const method = getMethodLiteral(requestSchema);
     this.assertRequestHandlerCapability(method);
-    this._requestHandlers.set(method, (request, extra) => {
-      const parsed = parseWithCompat(requestSchema, request);
+    this._requestHandlers.set(method, (request2, extra) => {
+      const parsed = parseWithCompat(requestSchema, request2);
       return Promise.resolve(handler(parsed, extra));
     });
   }
@@ -14519,21 +14519,21 @@ var Protocol = class {
    * the error appropriately (e.g., by failing the task, logging, etc.). The Protocol layer
    * simply propagates the error.
    */
-  async _enqueueTaskMessage(taskId, message, sessionId) {
+  async _enqueueTaskMessage(taskId, message, sessionId2) {
     if (!this._taskStore || !this._taskMessageQueue) {
       throw new Error("Cannot enqueue task message: taskStore and taskMessageQueue are not configured");
     }
     const maxQueueSize = this._options?.maxTaskQueueSize;
-    await this._taskMessageQueue.enqueue(taskId, message, sessionId, maxQueueSize);
+    await this._taskMessageQueue.enqueue(taskId, message, sessionId2, maxQueueSize);
   }
   /**
    * Clears the message queue for a task and rejects any pending request resolvers.
    * @param taskId The task ID whose queue should be cleared
    * @param sessionId Optional session ID for binding the operation to a specific session
    */
-  async _clearTaskQueue(taskId, sessionId) {
+  async _clearTaskQueue(taskId, sessionId2) {
     if (this._taskMessageQueue) {
-      const messages = await this._taskMessageQueue.dequeueAll(taskId, sessionId);
+      const messages = await this._taskMessageQueue.dequeueAll(taskId, sessionId2);
       for (const message of messages) {
         if (message.type === "request" && isJSONRPCRequest(message.message)) {
           const requestId = message.message.id;
@@ -14576,31 +14576,31 @@ var Protocol = class {
       }, { once: true });
     });
   }
-  requestTaskStore(request, sessionId) {
+  requestTaskStore(request2, sessionId2) {
     const taskStore = this._taskStore;
     if (!taskStore) {
       throw new Error("No task store configured");
     }
     return {
       createTask: async (taskParams) => {
-        if (!request) {
+        if (!request2) {
           throw new Error("No request provided");
         }
-        return await taskStore.createTask(taskParams, request.id, {
-          method: request.method,
-          params: request.params
-        }, sessionId);
+        return await taskStore.createTask(taskParams, request2.id, {
+          method: request2.method,
+          params: request2.params
+        }, sessionId2);
       },
       getTask: async (taskId) => {
-        const task = await taskStore.getTask(taskId, sessionId);
+        const task = await taskStore.getTask(taskId, sessionId2);
         if (!task) {
           throw new McpError(ErrorCode.InvalidParams, "Failed to retrieve task: Task not found");
         }
         return task;
       },
       storeTaskResult: async (taskId, status, result) => {
-        await taskStore.storeTaskResult(taskId, status, result, sessionId);
-        const task = await taskStore.getTask(taskId, sessionId);
+        await taskStore.storeTaskResult(taskId, status, result, sessionId2);
+        const task = await taskStore.getTask(taskId, sessionId2);
         if (task) {
           const notification = TaskStatusNotificationSchema.parse({
             method: "notifications/tasks/status",
@@ -14613,18 +14613,18 @@ var Protocol = class {
         }
       },
       getTaskResult: (taskId) => {
-        return taskStore.getTaskResult(taskId, sessionId);
+        return taskStore.getTaskResult(taskId, sessionId2);
       },
       updateTaskStatus: async (taskId, status, statusMessage) => {
-        const task = await taskStore.getTask(taskId, sessionId);
+        const task = await taskStore.getTask(taskId, sessionId2);
         if (!task) {
           throw new McpError(ErrorCode.InvalidParams, `Task "${taskId}" not found - it may have been cleaned up`);
         }
         if (isTerminal(task.status)) {
           throw new McpError(ErrorCode.InvalidParams, `Cannot update task "${taskId}" from terminal status "${task.status}" to "${status}". Terminal states (completed, failed, cancelled) cannot transition to other states.`);
         }
-        await taskStore.updateTaskStatus(taskId, status, statusMessage, sessionId);
-        const updatedTask = await taskStore.getTask(taskId, sessionId);
+        await taskStore.updateTaskStatus(taskId, status, statusMessage, sessionId2);
+        const updatedTask = await taskStore.getTask(taskId, sessionId2);
         if (updatedTask) {
           const notification = TaskStatusNotificationSchema.parse({
             method: "notifications/tasks/status",
@@ -14637,7 +14637,7 @@ var Protocol = class {
         }
       },
       listTasks: (cursor) => {
-        return taskStore.listTasks(cursor, sessionId);
+        return taskStore.listTasks(cursor, sessionId2);
       }
     };
   }
@@ -14749,8 +14749,8 @@ var ExperimentalServerTasks = class {
    *
    * @experimental
    */
-  requestStream(request, resultSchema, options) {
-    return this._server.requestStream(request, resultSchema, options);
+  requestStream(request2, resultSchema, options) {
+    return this._server.requestStream(request2, resultSchema, options);
   }
   /**
    * Sends a sampling request and returns an AsyncGenerator that yields response messages.
@@ -14988,19 +14988,19 @@ var Server = class extends Protocol {
     this._serverInfo = _serverInfo;
     this._loggingLevels = /* @__PURE__ */ new Map();
     this.LOG_LEVEL_SEVERITY = new Map(LoggingLevelSchema.options.map((level, index) => [level, index]));
-    this.isMessageIgnored = (level, sessionId) => {
-      const currentLevel = this._loggingLevels.get(sessionId);
+    this.isMessageIgnored = (level, sessionId2) => {
+      const currentLevel = this._loggingLevels.get(sessionId2);
       return currentLevel ? this.LOG_LEVEL_SEVERITY.get(level) < this.LOG_LEVEL_SEVERITY.get(currentLevel) : false;
     };
     this._capabilities = options?.capabilities ?? {};
     this._instructions = options?.instructions;
     this._jsonSchemaValidator = options?.jsonSchemaValidator ?? new AjvJsonSchemaValidator();
-    this.setRequestHandler(InitializeRequestSchema, (request) => this._oninitialize(request));
+    this.setRequestHandler(InitializeRequestSchema, (request2) => this._oninitialize(request2));
     this.setNotificationHandler(InitializedNotificationSchema, () => this.oninitialized?.());
     if (this._capabilities.logging) {
-      this.setRequestHandler(SetLevelRequestSchema, async (request, extra) => {
+      this.setRequestHandler(SetLevelRequestSchema, async (request2, extra) => {
         const transportSessionId = extra.sessionId || extra.requestInfo?.headers["mcp-session-id"] || void 0;
-        const { level } = request.params;
+        const { level } = request2.params;
         const parseResult = LoggingLevelSchema.safeParse(level);
         if (parseResult.success) {
           this._loggingLevels.set(transportSessionId, parseResult.data);
@@ -15059,14 +15059,14 @@ var Server = class extends Protocol {
     }
     const method = methodValue;
     if (method === "tools/call") {
-      const wrappedHandler = async (request, extra) => {
-        const validatedRequest = safeParse2(CallToolRequestSchema, request);
+      const wrappedHandler = async (request2, extra) => {
+        const validatedRequest = safeParse2(CallToolRequestSchema, request2);
         if (!validatedRequest.success) {
           const errorMessage = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
           throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage}`);
         }
         const { params } = validatedRequest.data;
-        const result = await Promise.resolve(handler(request, extra));
+        const result = await Promise.resolve(handler(request2, extra));
         if (params.task) {
           const taskValidationResult = safeParse2(CreateTaskResultSchema, result);
           if (!taskValidationResult.success) {
@@ -15197,10 +15197,10 @@ var Server = class extends Protocol {
     }
     assertToolsCallTaskCapability(this._capabilities.tasks?.requests, method, "Server");
   }
-  async _oninitialize(request) {
-    const requestedVersion = request.params.protocolVersion;
-    this._clientCapabilities = request.params.capabilities;
-    this._clientVersion = request.params.clientInfo;
+  async _oninitialize(request2) {
+    const requestedVersion = request2.params.protocolVersion;
+    this._clientCapabilities = request2.params.capabilities;
+    this._clientVersion = request2.params.clientInfo;
     const protocolVersion = SUPPORTED_PROTOCOL_VERSIONS.includes(requestedVersion) ? requestedVersion : LATEST_PROTOCOL_VERSION;
     return {
       protocolVersion,
@@ -15332,9 +15332,9 @@ var Server = class extends Protocol {
    * @param params
    * @param sessionId optional for stateless and backward compatibility
    */
-  async sendLoggingMessage(params, sessionId) {
+  async sendLoggingMessage(params, sessionId2) {
     if (this._capabilities.logging) {
-      if (!this.isMessageIgnored(params.level, sessionId)) {
+      if (!this.isMessageIgnored(params.level, sessionId2)) {
         return this.notification({ method: "notifications/message", params });
       }
     }
@@ -15450,15 +15450,108 @@ var StdioServerTransport = class {
   }
 };
 
+// src/http.ts
+import { AsyncLocalStorage } from "node:async_hooks";
+import { setTimeout as delay } from "node:timers/promises";
+var context = new AsyncLocalStorage();
+function operationSignal() {
+  return context.getStore();
+}
+function checkCancelled() {
+  operationSignal()?.throwIfAborted();
+}
+async function withBudget(fn, signal, ms = 45e3) {
+  const ac = new AbortController();
+  const timeout = setTimeout(() => ac.abort(new Error("Operation timed out")), ms);
+  const abort = () => ac.abort(signal?.reason ?? new Error("Operation cancelled"));
+  signal?.addEventListener("abort", abort, { once: true });
+  if (signal?.aborted) abort();
+  try {
+    return await context.run(ac.signal, fn);
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", abort);
+  }
+}
+async function wait(ms) {
+  checkCancelled();
+  await delay(ms, void 0, { signal: operationSignal() });
+}
+async function request(url, init = {}, options = {}) {
+  const deadline = Date.now() + (options.budgetMs ?? 15e3);
+  const method = (init.method ?? "GET").toUpperCase();
+  const retries = ["GET", "HEAD"].includes(method) ? options.retries ?? 1 : 0;
+  const parent = init.signal ?? operationSignal();
+  for (let attempt = 0; ; attempt++) {
+    parent?.throwIfAborted();
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error("HTTP retry budget exhausted");
+    const ac = new AbortController();
+    const abort = () => ac.abort(parent?.reason ?? new Error("Request cancelled"));
+    parent?.addEventListener("abort", abort, { once: true });
+    const timer = setTimeout(() => ac.abort(new Error("HTTP request timed out")), Math.min(options.timeoutMs ?? 8e3, remaining));
+    let retryDelay = 200 * (attempt + 1);
+    try {
+      const response = await fetch(url, { ...init, signal: ac.signal });
+      if (attempt < retries && [429, 502, 503, 504].includes(response.status)) {
+        const retryAfter = response.headers.get("retry-after");
+        if (retryAfter) {
+          const seconds = Number(retryAfter);
+          retryDelay = Number.isFinite(seconds) ? seconds * 1e3 : Math.max(0, Date.parse(retryAfter) - Date.now());
+        }
+        await response.body?.cancel();
+      } else {
+        if (options.probe || method === "HEAD" || [204, 205, 304].includes(response.status)) {
+          await response.body?.cancel();
+          return new Response(null, { status: response.status, statusText: response.statusText, headers: response.headers });
+        }
+        const reader = response.body?.getReader();
+        const chunks = [];
+        let size = 0;
+        if (reader) {
+          try {
+            for (; ; ) {
+              const part = await reader.read();
+              if (part.done) break;
+              size += part.value.length;
+              if (size > (options.maxBytes ?? 4 * 1024 * 1024)) throw new Error("HTTP response exceeds size limit");
+              chunks.push(part.value);
+            }
+          } catch (e) {
+            await reader.cancel().catch(() => {
+            });
+            throw e;
+          } finally {
+            reader.releaseLock();
+          }
+        }
+        return new Response(Buffer.concat(chunks), { status: response.status, statusText: response.statusText, headers: response.headers });
+      }
+    } catch (e) {
+      parent?.throwIfAborted();
+      if (attempt >= retries) throw e;
+    } finally {
+      clearTimeout(timer);
+      parent?.removeEventListener("abort", abort);
+    }
+    if (!Number.isFinite(retryDelay) || retryDelay >= deadline - Date.now()) throw new Error("HTTP retry budget exhausted");
+    await delay(Math.max(0, retryDelay), void 0, { signal: parent ?? void 0 });
+  }
+}
+
 // src/player.ts
 import { spawn, execFileSync as execFileSync2 } from "node:child_process";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
-import { dirname as dirname3, join as join6 } from "node:path";
+import { fileURLToPath } from "node:url";
+import { dirname as dirname2, join as join4 } from "node:path";
+import { mkdirSync as mkdirSync4, rmSync as rmSync2 } from "node:fs";
+import { tmpdir } from "node:os";
+import { randomUUID as randomUUID3 } from "node:crypto";
 
-// src/state.ts
-import { readFileSync as readFileSync4, writeFileSync as writeFileSync3, renameSync as renameSync3, mkdirSync as mkdirSync3, existsSync as existsSync3, unlinkSync } from "node:fs";
-import { homedir as homedir2 } from "node:os";
-import { join as join3 } from "node:path";
+// src/session.ts
+import { homedir } from "node:os";
+import { join as join2 } from "node:path";
+import { createHash, randomUUID as randomUUID2 } from "node:crypto";
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync2, renameSync as renameSync2, unlinkSync as unlinkSync2 } from "node:fs";
 
 // src/proc.ts
 import { execFileSync } from "node:child_process";
@@ -15520,6 +15613,9 @@ function sameProcess(pid, token) {
   const cur = procStartToken(pid);
   return cur === null ? true : cur === token;
 }
+function killSameProcess(pid, token) {
+  if (sameProcess(pid, token)) killPid(pid);
+}
 function killPid(pid) {
   if (!pid || !Number.isInteger(pid) || pid <= 0) return;
   try {
@@ -15545,13 +15641,9 @@ function killPid(pid) {
   } catch {
   }
 }
-function findOrphanPlayers(hosts2) {
-  if (hosts2.length === 0) return [];
-  const wanted = hosts2.map((h) => h.toLowerCase());
-  const matches = (cmd) => {
-    const c = cmd.toLowerCase();
-    return wanted.some((h) => c.includes(h));
-  };
+function findOrphanPlayers(marker) {
+  if (!/^pirate-radio-[a-f0-9]{24}$/.test(marker)) return [];
+  const matches = (cmd) => cmd.split(/[\s\"]+/).some((arg) => arg === `--title=${marker}` || arg === marker);
   try {
     if (isWin) {
       const out2 = execFileSync(
@@ -15565,7 +15657,7 @@ function findOrphanPlayers(hosts2) {
       );
       return parsePidLines(out2, "	", matches);
     }
-    const out = execFileSync("ps", ["-eo", "pid=,args="], {
+    const out = execFileSync("ps", ["-eo", isMac ? "pid=,ucomm=,args=" : "pid=,comm=,args="], {
       encoding: "utf8",
       timeout: 8e3
     });
@@ -15588,14 +15680,10 @@ function parsePidLines(out, sep, matches) {
 function parseUnixPs(out, matches) {
   const pids = [];
   for (const line of out.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const sp = trimmed.indexOf(" ");
-    if (sp === -1) continue;
-    const pid = Number(trimmed.slice(0, sp));
-    const cmd = trimmed.slice(sp + 1);
-    if (!/(^|\/)(mpv|ffplay)\b/.test(cmd)) continue;
-    if (Number.isInteger(pid) && pid > 0 && matches(cmd)) pids.push(pid);
+    const row = line.trim().match(/^(\d+)\s+(mpv|ffplay)\s+([\s\S]+)$/);
+    if (!row) continue;
+    const pid = Number(row[1]);
+    if (Number.isInteger(pid) && pid > 0 && matches(row[3])) pids.push(pid);
   }
   return pids;
 }
@@ -15669,92 +15757,100 @@ function findPiProcess() {
   return null;
 }
 
-// src/registry.ts
-import {
-  readFileSync as readFileSync3,
-  writeFileSync as writeFileSync2,
-  renameSync as renameSync2,
-  mkdirSync as mkdirSync2,
-  existsSync as existsSync2
-} from "node:fs";
-import { homedir } from "node:os";
-import { join as join2 } from "node:path";
-
 // src/lock.ts
-import { mkdirSync, readFileSync as readFileSync2, writeFileSync, renameSync, rmSync, rmdirSync, statSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync as readFileSync2, writeFileSync, renameSync, rmSync, rmdirSync, statSync, existsSync, readdirSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
 var LOCK_STALE_MS = 15e3;
 var LOCK_WAIT_MS = 3e4;
 function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
-function withCrossProcessLock(lockPath2, fn) {
-  mkdirSync(dirname(lockPath2), { recursive: true });
-  const holderFile = join(lockPath2, "holder");
-  const deadline = Date.now() + LOCK_WAIT_MS;
-  for (; ; ) {
-    try {
-      mkdirSync(lockPath2);
-      break;
-    } catch {
-      let broke = false;
-      try {
-        const raw = readFileSync2(holderFile, "utf8").trim();
-        const parts = raw.split("\n");
-        const holderPid = Number(parts[0]);
-        const holderToken = parts[1] || null;
-        if (!sameProcess(holderPid, holderToken)) broke = true;
-      } catch {
-        try {
-          const age = Date.now() - statSync(lockPath2).mtimeMs;
-          if (age > LOCK_STALE_MS) broke = true;
-        } catch {
-        }
-      }
-      if (broke) {
-        const dead = `${lockPath2}.dead.${process.pid}`;
-        try {
-          renameSync(lockPath2, dead);
-          rmSync(dead, { recursive: true, force: true });
-        } catch {
-        }
-        continue;
-      }
-      if (Date.now() > deadline) {
-        throw new Error(`Timed out waiting for lock: ${lockPath2}`);
-      }
-      sleep(50);
+function reclaimDeadOwner(lockPath2) {
+  try {
+    const files = readdirSync(lockPath2);
+    if (files.length === 0) {
+      if (Date.now() - statSync(lockPath2).mtimeMs > LOCK_STALE_MS) rmdirSync(lockPath2);
+      return;
     }
+    if (files.length !== 1) return;
+    const name = files[0];
+    if (name !== "holder" && !/^holder-[0-9a-f-]{36}$/.test(name)) return;
+    const holder = join(lockPath2, name);
+    const [pidText, token] = readFileSync2(holder, "utf8").trim().split("\n");
+    const pid = Number(pidText);
+    if (!Number.isInteger(pid) || pid <= 0) {
+      if (Date.now() - statSync(holder).mtimeMs <= LOCK_STALE_MS) return;
+    } else if (sameProcess(pid, token || null)) {
+      return;
+    }
+    unlinkSync(holder);
+    rmdirSync(lockPath2);
+  } catch {
+  }
+}
+function release(lockPath2, owner) {
+  try {
+    unlinkSync(join(lockPath2, owner));
+  } catch {
   }
   try {
-    const token = procStartToken(process.pid) ?? "";
-    writeFileSync(holderFile, `${process.pid}
-${token}`);
+    rmdirSync(lockPath2);
+  } catch {
+  }
+}
+function* acquireSteps(lockPath2) {
+  mkdirSync(dirname(lockPath2), { recursive: true });
+  const id = randomUUID();
+  const owner = `holder-${id}`;
+  const staged = `${lockPath2}.claim.${process.pid}.${id}`;
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  mkdirSync(staged);
+  try {
+    writeFileSync(join(staged, owner), `${process.pid}
+${procStartToken(process.pid) ?? ""}`);
+    for (; ; ) {
+      try {
+        renameSync(staged, lockPath2);
+        return owner;
+      } catch (e) {
+        const code = e.code;
+        const occupied = code === "EEXIST" || code === "ENOTEMPTY";
+        const windowsOccupied = (code === "EPERM" || code === "EACCES") && existsSync(lockPath2);
+        if (!occupied && !windowsOccupied) throw e;
+      }
+      if (Date.now() >= deadline) throw new Error(`Timed out waiting for lock: ${lockPath2}`);
+      reclaimDeadOwner(lockPath2);
+      yield;
+    }
+  } finally {
+    rmSync(staged, { recursive: true, force: true });
+  }
+}
+function withCrossProcessLock(lockPath2, fn) {
+  const steps = acquireSteps(lockPath2);
+  let step = steps.next();
+  while (!step.done) {
+    sleep(50);
+    step = steps.next();
+  }
+  const owner = step.value;
+  try {
     const result = fn();
     if (result && typeof result.then === "function") {
       return (async () => {
         try {
           return await result;
         } finally {
-          release(lockPath2);
+          release(lockPath2, owner);
         }
       })();
     }
-    release(lockPath2);
+    release(lockPath2, owner);
     return result;
   } catch (e) {
-    release(lockPath2);
+    release(lockPath2, owner);
     throw e;
-  }
-}
-function release(lockPath2) {
-  try {
-    rmSync(join(lockPath2, "holder"), { force: true });
-  } catch {
-  }
-  try {
-    rmdirSync(lockPath2);
-  } catch {
   }
 }
 function readRegistryUnsafe(registryPath2) {
@@ -15766,36 +15862,133 @@ function readRegistryUnsafe(registryPath2) {
     return { players: [], watchdogs: [] };
   }
 }
-function saveStateUnsafe(statePath2, data) {
+async function acquireAsyncCrossProcessLock(path2, signal) {
+  const steps = acquireSteps(path2);
   try {
-    const tmp = `${statePath2}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify(data, null, 2));
-    renameSync(tmp, statePath2);
-  } catch {
+    for (; ; ) {
+      signal?.throwIfAborted();
+      const step = steps.next();
+      if (step.done) {
+        const owner = step.value;
+        return () => release(path2, owner);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  } finally {
+    steps.return("");
+  }
+}
+async function withAsyncCrossProcessLock(path2, fn, signal) {
+  const release2 = await acquireAsyncCrossProcessLock(path2, signal);
+  try {
+    signal?.throwIfAborted();
+    return await fn();
+  } finally {
+    release2();
   }
 }
 
+// src/session.ts
+var root = join2(homedir(), ".pirate-radio");
+var directory;
+var scopeKey = "";
+var boundSession;
+var pi;
+function hostProcess() {
+  if (pi === void 0) pi = findPiProcess();
+  return pi;
+}
+function dataDir() {
+  if (directory) return directory;
+  const explicit = process.env.PIRATE_RADIO_SESSION?.trim();
+  const host = explicit ? null : hostProcess();
+  const key = explicit || (host ? `pi:${host.pid}:${host.token ?? ""}` : "");
+  scopeKey = key;
+  directory = key ? join2(root, "sessions", createHash("sha256").update(key).digest("hex").slice(0, 24)) : root;
+  return directory;
+}
+function readAnchor() {
+  try {
+    const a = JSON.parse(readFileSync3(join2(dataDir(), "anchor.json"), "utf8"));
+    if (Number.isInteger(a?.pid) && a.pid > 0 && (a.token == null || typeof a.token === "string")) {
+      return { pid: a.pid, token: a.token ?? null, sessionId: typeof a.sessionId === "string" ? a.sessionId : void 0 };
+    }
+  } catch {
+  }
+  return null;
+}
+function anchorAlive(anchor) {
+  return !!anchor && sameProcess(anchor.pid, anchor.token);
+}
+function sessionId() {
+  return boundSession ??= readAnchor()?.sessionId ?? "legacy";
+}
+function writeAnchor(pid, id = randomUUID2()) {
+  mkdirSync2(dataDir(), { recursive: true, mode: 448 });
+  const anchor = { pid, token: procStartToken(pid), sessionId: id };
+  const path2 = join2(dataDir(), "anchor.json");
+  const tmp = `${path2}.${process.pid}.tmp`;
+  writeFileSync2(tmp, JSON.stringify(anchor), { mode: 384 });
+  renameSync2(tmp, path2);
+  boundSession = id;
+  return anchor;
+}
+function clearAnchor(expected) {
+  const cur = readAnchor();
+  if (expected && (!cur || cur.pid !== expected.pid || cur.token !== expected.token || cur.sessionId !== expected.sessionId)) return;
+  try {
+    unlinkSync2(join2(dataDir(), "anchor.json"));
+  } catch {
+  }
+}
+function withSessionLock(fn) {
+  return withCrossProcessLock(join2(dataDir(), "session.lock"), fn);
+}
+function claimAnchor(retire) {
+  return withSessionLock(() => {
+    const old = readAnchor();
+    if (anchorAlive(old)) throw new Error(`another server is already running (pid ${old.pid})`);
+    retire(old);
+    return writeAnchor(process.pid);
+  });
+}
+function playerMarker(id = sessionId()) {
+  return `pirate-radio-${createHash("sha256").update(`${dataDir()}:${id}`).digest("hex").slice(0, 24)}`;
+}
+function sessionEnvironment() {
+  dataDir();
+  return { ...process.env, PIRATE_RADIO_SESSION: scopeKey };
+}
+
 // src/registry.ts
-var dir = join2(homedir(), ".pirate-radio");
-var regPath = join2(dir, "players.json");
-var lockPath = join2(dir, "players.lock");
+import {
+  readFileSync as readFileSync4,
+  writeFileSync as writeFileSync3,
+  renameSync as renameSync3,
+  mkdirSync as mkdirSync3,
+  existsSync as existsSync2
+} from "node:fs";
+import { join as join3 } from "node:path";
+var dir = dataDir();
+var regPath = join3(dir, "players.json");
+var lockPath = join3(dir, "players.lock");
 function registryPath() {
   return regPath;
 }
 function readRaw() {
   if (!existsSync2(regPath)) return { players: [], watchdogs: [] };
   try {
-    const r = JSON.parse(readFileSync3(regPath, "utf8"));
+    const r = JSON.parse(readFileSync4(regPath, "utf8"));
     return { players: r.players ?? [], watchdogs: r.watchdogs ?? [] };
   } catch {
     return { players: [], watchdogs: [] };
   }
 }
 function writeRaw(r) {
-  mkdirSync2(dir, { recursive: true });
+  mkdirSync3(dir, { recursive: true });
   const tmp = `${regPath}.${process.pid}.tmp`;
-  writeFileSync2(tmp, JSON.stringify(r, null, 2));
-  renameSync2(tmp, regPath);
+  writeFileSync3(tmp, JSON.stringify(r, null, 2));
+  renameSync3(tmp, regPath);
 }
 function withLock(fn) {
   return withCrossProcessLock(lockPath, () => {
@@ -15805,23 +15998,29 @@ function withLock(fn) {
     return result;
   });
 }
-function addPlayer(pid, host) {
+function addPlayer(pid, host, metadata = {}) {
   const token = procStartToken(pid);
   withLock((r) => {
     r.players = prune(r.players);
-    r.players.push({ pid, token, host });
+    r.players.push({ ...metadata, pid, token, host, sessionId: sessionId() });
   });
 }
 function addWatchdog(pid) {
   const token = procStartToken(pid);
   withLock((r) => {
     r.watchdogs = prune(r.watchdogs);
-    r.watchdogs.push({ pid, token });
+    r.watchdogs.push({ pid, token, sessionId: sessionId() });
+  });
+}
+function livePlayers(id = sessionId()) {
+  return withLock((r) => {
+    r.players = prune(r.players);
+    return r.players.filter((e) => owned(e, id));
   });
 }
 function livePlayerCountUnlocked() {
   try {
-    return prune(readRaw().players).length;
+    return prune(readRaw().players).filter((e) => owned(e)).length;
   } catch {
     return 0;
   }
@@ -15836,272 +16035,67 @@ function removeWatchdog(pid) {
     r.watchdogs = r.watchdogs.filter((e) => e.pid !== pid);
   });
 }
-function drainPlayers() {
-  return withLock((r) => {
-    const live = prune(r.players);
-    r.players = [];
-    return live;
-  });
+function owned(entry, id = sessionId()) {
+  return (entry.sessionId ?? "legacy") === id;
 }
-function drainWatchdogs() {
+function drainAll(id = sessionId()) {
   return withLock((r) => {
-    const live = prune(r.watchdogs);
-    r.watchdogs = [];
-    return live;
+    const players = prune(r.players.filter((e) => owned(e, id)));
+    const watchdogs = prune(r.watchdogs.filter((e) => owned(e, id)));
+    r.players = r.players.filter((e) => !owned(e, id));
+    r.watchdogs = r.watchdogs.filter((e) => !owned(e, id));
+    return { players, watchdogs };
   });
 }
 function prune(list2) {
   return list2.filter((e) => sameProcess(e.pid, e.token));
 }
 
-// src/state.ts
-var stateDir = join3(homedir2(), ".pirate-radio");
-var stateFilePath = join3(stateDir, "state.json");
-var stateLockPath = join3(stateDir, "state.lock");
-var anchorPath = join3(stateDir, "anchor.json");
-var defaults = {
-  state: "stopped",
-  source: null,
-  genre: null,
-  stationName: null,
-  stationIndex: 0,
-  title: null,
-  volume: 80,
-  spotifyVerifier: null,
-  podcastFeed: null,
-  podcastName: null,
-  episodeIndex: 0
-};
-var now = { ...defaults };
-function loadState() {
-  withCrossProcessLock(stateLockPath, () => loadStateUnlocked());
-}
-var inProcTail = Promise.resolve();
-async function withState(fn) {
-  const run = () => withCrossProcessLock(stateLockPath, async () => {
-    loadStateUnlocked();
-    try {
-      const out = await fn();
-      saveStateUnlocked();
-      return out;
-    } catch (e) {
-      saveStateUnlocked();
-      throw e;
-    }
-  });
-  const p = inProcTail.then(run, run);
-  inProcTail = p.catch(() => {
-  });
-  return p;
-}
-var fieldType = {
-  state: "string",
-  source: "string",
-  genre: "string",
-  stationName: "string",
-  stationIndex: "number",
-  title: "string",
-  volume: "number",
-  spotifyVerifier: "string",
-  podcastFeed: "string",
-  podcastName: "string",
-  episodeIndex: "number"
-};
-function loadStateUnlocked() {
-  if (!existsSync3(stateFilePath)) {
-    Object.assign(now, defaults);
-    return;
-  }
-  let raw = {};
-  try {
-    raw = JSON.parse(readFileSync4(stateFilePath, "utf8"));
-  } catch {
-    process.stderr.write("radiohead: state.json unreadable, resetting to defaults\n");
-    Object.assign(now, defaults);
-    return;
-  }
-  const target = now;
-  for (const key of Object.keys(defaults)) {
-    const got = raw[key];
-    if (got === null && defaults[key] === null || typeof got === fieldType[key]) target[key] = got;
-    else target[key] = defaults[key];
-  }
-}
-function saveStateUnlocked() {
-  mkdirSync3(stateDir, { recursive: true });
-  const tmp = `${stateFilePath}.${process.pid}.tmp`;
-  writeFileSync3(tmp, JSON.stringify(now, null, 2));
-  renameSync3(tmp, stateFilePath);
-}
-function saveState() {
-  withCrossProcessLock(stateLockPath, () => saveStateUnlocked());
-}
-function statePath() {
-  return stateFilePath;
-}
-function writeAnchor(pid) {
-  mkdirSync3(stateDir, { recursive: true });
-  const anchor = { pid, token: procStartToken(pid) };
-  const tmp = `${anchorPath}.${process.pid}.tmp`;
-  writeFileSync3(tmp, JSON.stringify(anchor));
-  renameSync3(tmp, anchorPath);
-}
-function readAnchor() {
-  if (!existsSync3(anchorPath)) return null;
-  try {
-    const a = JSON.parse(readFileSync4(anchorPath, "utf8"));
-    if (typeof a.pid === "number" && a.pid > 0) {
-      return { pid: a.pid, token: a.token ?? null };
-    }
-  } catch {
-  }
-  return null;
-}
-function anchorAlive(anchor) {
-  if (!anchor) return false;
-  return sameProcess(anchor.pid, anchor.token);
-}
-function clearAnchor() {
-  try {
-    unlinkSync(anchorPath);
-  } catch {
-  }
-}
-function describe2() {
-  if (now.state === "stopped" || !now.source) return "Stopped.";
-  const localSource = now.source === "radio" || now.source === "podcast" || now.source === "hoer";
-  if (localSource && now.state === "playing" && livePlayerCountUnlocked() === 0) {
-    return "Stopped (player exited unexpectedly).";
-  }
-  const what = now.source === "radio" ? `${now.genre} radio \u2014 ${now.stationName}` : now.source === "podcast" ? `Podcast ${now.podcastName ?? "(unknown)"} \u2014 ${now.title ?? "(unknown)"}` : now.source === "hoer" ? `H\xD6R Berlin \u2014 ${now.title ?? "(unknown)"}` : now.source === "applemusic" ? `Apple Music \u2014 ${now.title ?? "(unknown)"}` : `Spotify \u2014 ${now.title ?? "(unknown)"}`;
-  return `${now.state === "paused" ? "Paused" : "Playing"}: ${what} (vol ${now.volume})`;
-}
-
-// src/dynhosts.ts
-import { readFileSync as readFileSync6, writeFileSync as writeFileSync4, renameSync as renameSync4, mkdirSync as mkdirSync4, existsSync as existsSync4 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import { join as join5 } from "node:path";
-
-// src/stations.ts
-import { readFileSync as readFileSync5 } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname as dirname2, join as join4 } from "node:path";
-var here = dirname2(fileURLToPath(import.meta.url));
-var emptyCatalog = { version: 2, aliases: {}, genres: {} };
-var catalog = emptyCatalog;
-try {
-  const raw = JSON.parse(readFileSync5(join4(here, "..", "data", "stations.json"), "utf8"));
-  catalog = validateCatalog(raw);
-} catch (e) {
-  process.stderr.write(`radiohead: failed to load stations.json \u2014 ${e.message}
-`);
-}
-function nonEmpty(value) {
-  return typeof value === "string" && value.trim().length > 0;
-}
-function validateCatalog(value) {
-  if (!value || typeof value !== "object") throw new Error("catalog must be an object");
-  const raw = value;
-  if (raw.version !== 2) throw new Error(`unsupported catalog version: ${String(raw.version)}`);
-  if (!raw.aliases || typeof raw.aliases !== "object" || Array.isArray(raw.aliases))
-    throw new Error("aliases must be an object");
-  if (!raw.genres || typeof raw.genres !== "object" || Array.isArray(raw.genres))
-    throw new Error("genres must be an object");
-  const genres3 = {};
-  const seenUrls = /* @__PURE__ */ new Set();
-  for (const [id, candidate] of Object.entries(raw.genres)) {
-    if (!/^[a-z0-9-]+$/.test(id)) throw new Error(`invalid genre id: ${id}`);
-    if (!candidate || typeof candidate !== "object") throw new Error(`${id}: genre must be an object`);
-    const genre = candidate;
-    if (!nonEmpty(genre.label)) throw new Error(`${id}: label is required`);
-    if (!nonEmpty(genre.description)) throw new Error(`${id}: description is required`);
-    if (!Array.isArray(genre.stations) || genre.stations.length === 0)
-      throw new Error(`${id}: stations must be a non-empty array`);
-    const stations2 = genre.stations.map((candidateStation, index) => {
-      if (!candidateStation || typeof candidateStation !== "object")
-        throw new Error(`${id}[${index}]: station must be an object`);
-      const station = candidateStation;
-      if (!nonEmpty(station.name)) throw new Error(`${id}[${index}]: name is required`);
-      if (!nonEmpty(station.url)) throw new Error(`${id}[${index}]: url is required`);
-      let parsed;
-      try {
-        parsed = new URL(station.url);
-      } catch {
-        throw new Error(`${id}[${index}]: invalid URL`);
+// src/ipc.ts
+import { createConnection } from "node:net";
+import { randomInt } from "node:crypto";
+async function mpvCommand(path2, command, timeoutMs = 1500, signal = operationSignal()) {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const id = randomInt(1, 2147483647);
+    const socket = createConnection(path2);
+    let buffer = "", settled = false;
+    const finish = (error2, data) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      socket.destroy();
+      if (error2) reject(error2);
+      else resolve(data);
+    };
+    const abort = () => finish(new Error("Player control cancelled"));
+    const timer = setTimeout(() => finish(new Error("mpv IPC timed out")), timeoutMs);
+    signal?.addEventListener("abort", abort, { once: true });
+    socket.setEncoding("utf8");
+    socket.on("connect", () => socket.write(JSON.stringify({ command, request_id: id }) + "\n"));
+    socket.on("error", (e) => finish(e));
+    socket.on("close", () => finish(new Error("mpv IPC disconnected before acknowledgement")));
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      if (buffer.length > 1024 * 1024) {
+        finish(new Error("mpv IPC response too large"));
+        return;
       }
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
-        throw new Error(`${id}[${index}]: URL must be HTTP(S)`);
-      if (seenUrls.has(station.url)) throw new Error(`${id}[${index}]: duplicate URL ${station.url}`);
-      seenUrls.add(station.url);
-      return { name: station.name, url: station.url };
+      let end;
+      while ((end = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, end);
+        buffer = buffer.slice(end + 1);
+        try {
+          const message = JSON.parse(line);
+          if (message.request_id !== id) continue;
+          finish(message.error === "success" ? void 0 : new Error(`mpv: ${message.error ?? "invalid response"}`), message.data);
+        } catch {
+          finish(new Error("Malformed mpv IPC response"));
+        }
+      }
     });
-    genres3[id] = { label: genre.label, description: genre.description, stations: stations2 };
-  }
-  const aliases = {};
-  for (const [alias, target] of Object.entries(raw.aliases)) {
-    if (!/^[a-z0-9-]+$/.test(alias) || !nonEmpty(target)) throw new Error(`invalid alias: ${alias}`);
-    if (genres3[alias]) throw new Error(`alias conflicts with genre: ${alias}`);
-    if (!genres3[target]) throw new Error(`alias ${alias} targets unknown genre ${target}`);
-    aliases[alias] = target;
-  }
-  return { version: 2, aliases, genres: genres3 };
-}
-function all() {
-  return Object.fromEntries(Object.entries(catalog.genres).map(([id, genre]) => [id, genre.stations]));
-}
-function genres() {
-  return Object.keys(catalog.genres);
-}
-function acceptedGenres() {
-  return [...genres(), ...Object.keys(catalog.aliases)];
-}
-function resolveGenre(input) {
-  const id = input.trim().toLowerCase();
-  if (catalog.genres[id]) return id;
-  return catalog.aliases[id] ?? null;
-}
-function genreInfo(id) {
-  const resolved = resolveGenre(id);
-  return resolved ? catalog.genres[resolved] : null;
-}
-var hostCache = null;
-function hosts() {
-  if (hostCache) return hostCache;
-  const set = /* @__PURE__ */ new Set();
-  for (const genre of Object.values(catalog.genres)) {
-    for (const station of genre.stations) set.add(new URL(station.url).host.toLowerCase());
-  }
-  hostCache = [...set];
-  return hostCache;
-}
-
-// src/dynhosts.ts
-var dir2 = join5(homedir3(), ".pirate-radio");
-var path = join5(dir2, "dynamic-hosts.json");
-var CAP = 20;
-function dynamicHosts() {
-  if (!existsSync4(path)) return [];
-  try {
-    const arr = JSON.parse(readFileSync6(path, "utf8"));
-    return Array.isArray(arr) ? arr.filter((h) => typeof h === "string") : [];
-  } catch {
-    return [];
-  }
-}
-function sweepHosts() {
-  return lifecycleTestMode ? dynamicHosts() : [...hosts(), ...dynamicHosts()];
-}
-function rememberHost(host) {
-  const h = host.toLowerCase();
-  if (!h) return;
-  try {
-    const next4 = [h, ...dynamicHosts().filter((x) => x !== h)].slice(0, CAP);
-    mkdirSync4(dir2, { recursive: true });
-    const tmp = `${path}.${process.pid}.tmp`;
-    writeFileSync4(tmp, JSON.stringify(next4, null, 2));
-    renameSync4(tmp, path);
-  } catch {
-  }
+  });
 }
 
 // src/player.ts
@@ -16129,33 +16123,106 @@ function playerAvailable() {
 function installHint() {
   return "No audio player found. Install mpv (recommended) or ffmpeg:\n  macOS:   brew install mpv\n  Windows: winget install mpv   (or scoop install mpv)\n  Linux:   sudo apt install mpv  (or your package manager)";
 }
-function stop() {
-  for (const p of drainPlayers()) killPid(p.pid);
-  for (const w of drainWatchdogs()) killPid(w.pid);
-  sweepOrphans();
+function stop(id = sessionId()) {
+  const { players, watchdogs } = drainAll(id);
+  for (const p of players) {
+    killSameProcess(p.pid, p.token);
+    if (p.ipc && process.platform !== "win32") {
+      try {
+        rmSync2(p.ipc, { force: true });
+      } catch {
+      }
+    }
+  }
+  for (const w of watchdogs) if (w.pid !== process.pid) killSameProcess(w.pid, w.token);
+  for (const pid of findOrphanPlayers(playerMarker(id))) killPid(pid);
 }
-function sweepOrphans() {
-  for (const pid of findOrphanPlayers(sweepHosts())) killPid(pid);
+var here = dirname2(fileURLToPath(import.meta.url));
+function ipcPath() {
+  const id = randomUUID3();
+  if (process.platform === "win32") return `\\\\.\\pipe\\pirate-radio-${id}`;
+  const dir3 = join4(tmpdir(), `pr-${process.getuid?.() ?? "user"}`);
+  mkdirSync4(dir3, { recursive: true, mode: 448 });
+  return join4(dir3, `${id}.sock`);
 }
-var here2 = dirname3(fileURLToPath2(import.meta.url));
-function play(url, volume) {
+async function play(url, volume) {
+  checkCancelled();
   const player = detect();
   if (!player) throw new Error(installHint());
   stop();
-  const args = player === "mpv" ? ["--no-video", "--really-quiet", `--volume=${volume}`, url] : ["-nodisp", "-autoexit", "-loglevel", "quiet", "-volume", String(volume), url];
+  const marker = playerMarker();
+  const ipc = player === "mpv" ? ipcPath() : void 0;
+  const args = player === "mpv" ? ["--no-config", "--no-video", "--really-quiet", `--title=${marker}`, `--input-ipc-server=${ipc}`, `--volume=${volume}`, "--", url] : ["-nodisp", "-autoexit", "-loglevel", "quiet", "-window_title", marker, "-volume", String(volume), "-i", url];
   const child = spawn(player, args, { stdio: "ignore", detached: true, windowsHide: true });
-  child.unref();
   const pid = child.pid;
-  if (pid) {
+  let error2;
+  child.on("error", (e) => {
+    error2 = e;
+  });
+  try {
+    await new Promise((resolve, reject) => {
+      child.once("spawn", resolve);
+      child.once("error", reject);
+    });
+    if (!pid) throw new Error("Audio player did not start");
     let host;
     try {
       host = new URL(url).host;
     } catch {
     }
-    addPlayer(pid, host);
-    child.on("error", () => removePlayer(pid));
-    child.on("exit", () => removePlayer(pid));
+    addPlayer(pid, host, { ipc, player });
+    child.on("exit", () => {
+      try {
+        removePlayer(pid);
+      } catch {
+      }
+    });
+    if (ipc) {
+      const deadline = Date.now() + 4e3;
+      for (; ; ) {
+        checkCancelled();
+        if (error2 || child.exitCode !== null) throw error2 ?? new Error("mpv exited during startup");
+        try {
+          await mpvCommand(ipc, ["get_property", "pid"], 500);
+          break;
+        } catch (e) {
+          if (Date.now() >= deadline) throw e;
+          await wait(50);
+        }
+      }
+    }
     spawnWatchdog(pid);
+    child.unref();
+  } catch (e) {
+    if (pid) {
+      killPid(pid);
+      removePlayer(pid);
+    }
+    if (ipc && process.platform !== "win32") {
+      try {
+        rmSync2(ipc, { force: true });
+      } catch {
+      }
+    }
+    throw e;
+  }
+}
+async function setPaused(paused) {
+  const players = livePlayers();
+  if (!players.length) return false;
+  if (players.some((p) => !p.ipc)) throw new Error("Pause/resume without restarting requires mpv. Use radio_stop or install mpv.");
+  for (const p of players) {
+    if (!sameProcess(p.pid, p.token)) throw new Error("Player exited");
+    await mpvCommand(p.ipc, ["set_property", "pause", paused]);
+  }
+  return true;
+}
+async function setVolume(volume) {
+  const players = livePlayers();
+  if (players.some((p) => !p.ipc)) throw new Error("Live volume control requires mpv; ffplay is not restarted automatically.");
+  for (const p of players) {
+    if (!sameProcess(p.pid, p.token)) throw new Error("Player exited");
+    await mpvCommand(p.ipc, ["set_property", "volume", volume]);
   }
 }
 function spawnWatchdog(playerPid) {
@@ -16164,41 +16231,214 @@ function spawnWatchdog(playerPid) {
     spawnWatchdogProc("file", anchor.pid, anchor.token, playerPid);
     return;
   }
-  const host = findPiProcess();
+  const host = hostProcess();
   if (host) spawnWatchdogProc("pid", host.pid, host.token, playerPid);
 }
-function spawnWatchdogProc(kind, anchorPid, anchorToken, playerPid) {
+function spawnWatchdogProc(kind, anchorPid, token, playerPid) {
   const wd = spawn(
     process.execPath,
-    [
-      join6(here2, "watchdog.js"),
-      String(anchorPid),
-      anchorToken ?? "",
-      String(playerPid),
-      kind
-    ],
-    { stdio: "ignore", detached: true, windowsHide: true }
+    [join4(here, "watchdog.js"), String(anchorPid), token ?? "", String(playerPid), kind, sessionId(), procStartToken(playerPid) ?? ""],
+    { stdio: "ignore", detached: true, windowsHide: true, env: sessionEnvironment() }
   );
-  wd.unref();
-  const pid = wd.pid;
-  if (pid) {
-    addWatchdog(pid);
-    wd.on("error", () => removeWatchdog(pid));
-    wd.on("exit", () => removeWatchdog(pid));
+  wd.on("error", () => {
+    if (wd.pid) {
+      try {
+        removeWatchdog(wd.pid);
+      } catch {
+      }
+    }
+  });
+  if (wd.pid) {
+    addWatchdog(wd.pid);
+    wd.on("exit", () => {
+      try {
+        removeWatchdog(wd.pid);
+      } catch {
+      }
+    });
   }
+  wd.unref();
 }
 
 // src/sources/spotify.ts
-import { readFileSync as readFileSync7, writeFileSync as writeFileSync5, mkdirSync as mkdirSync5, existsSync as existsSync5 } from "node:fs";
-import { homedir as homedir4 } from "node:os";
-import { join as join7 } from "node:path";
-import { createHash, randomBytes } from "node:crypto";
+import { readFileSync as readFileSync6, writeFileSync as writeFileSync5, mkdirSync as mkdirSync6, existsSync as existsSync4, renameSync as renameSync5 } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { join as join6 } from "node:path";
+import { createHash as createHash2, randomBytes } from "node:crypto";
+
+// src/state.ts
+import { readFileSync as readFileSync5, writeFileSync as writeFileSync4, renameSync as renameSync4, mkdirSync as mkdirSync5, existsSync as existsSync3 } from "node:fs";
+import { join as join5 } from "node:path";
+import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
+var stateDir = dataDir();
+var stateFilePath = join5(stateDir, "state.json");
+var stateLockPath = join5(stateDir, "state.lock");
+var defaults = {
+  revision: 0,
+  state: "stopped",
+  source: null,
+  genre: null,
+  stationName: null,
+  stationIndex: 0,
+  title: null,
+  volume: 80,
+  spotifyVerifier: null,
+  podcastFeed: null,
+  podcastName: null,
+  episodeIndex: 0
+};
+var transactions = new AsyncLocalStorage2();
+var fallback = { ...defaults };
+var now = new Proxy(fallback, {
+  get: (target, key) => Reflect.get(transactions.getStore()?.draft ?? target, key),
+  set: (target, key, value) => Reflect.set(transactions.getStore()?.draft ?? target, key, value),
+  ownKeys: () => Reflect.ownKeys(defaults),
+  getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true })
+});
+function loadState() {
+  withCrossProcessLock(stateLockPath, () => loadStateUnlocked());
+}
+function snapshot() {
+  return transactions.run(void 0, () => {
+    loadStateUnlocked();
+    return { ...fallback };
+  });
+}
+function ensureCurrent(tx, current) {
+  const anchor = readAnchor();
+  if (!tx.release && tx.revision !== void 0 && current.revision !== tx.revision || tx.session !== "legacy" && anchor?.sessionId !== tx.session || anchor?.sessionId && anchor.sessionId !== tx.session) {
+    throw new Error("Playback request superseded by a newer command or session");
+  }
+}
+async function withState(fn, mutation = false) {
+  const base = withCrossProcessLock(stateLockPath, () => {
+    const state = snapshot();
+    if (mutation) {
+      state.revision++;
+      writeSnapshot(state);
+    }
+    return state;
+  });
+  const tx = { base, draft: { ...base }, revision: mutation ? base.revision : void 0, session: sessionId() };
+  return transactions.run(tx, async () => {
+    try {
+      const out = await fn();
+      if (!tx.release) checkCancelled();
+      withCrossProcessLock(stateLockPath, () => {
+        const latest = snapshot();
+        ensureCurrent(tx, latest);
+        for (const key of Object.keys(defaults)) {
+          if (key === "revision" || tx.draft[key] === tx.base[key]) continue;
+          if (latest[key] !== tx.base[key]) throw new Error(`Concurrent state update: ${key}`);
+          latest[key] = tx.draft[key];
+        }
+        writeSnapshot(latest);
+      });
+      return out;
+    } finally {
+      tx.release?.();
+    }
+  });
+}
+async function playbackEffect(fn) {
+  checkCancelled();
+  const tx = transactions.getStore();
+  if (tx?.release) return await fn();
+  const releaseSession = await acquireAsyncCrossProcessLock(join5(stateDir, "session.lock"), operationSignal());
+  let releasePlayback;
+  const release2 = () => {
+    releasePlayback?.();
+    releaseSession();
+  };
+  try {
+    releasePlayback = await acquireAsyncCrossProcessLock(join5(stateDir, "playback.lock"), operationSignal());
+  } catch (e) {
+    releaseSession();
+    throw e;
+  }
+  try {
+    checkCancelled();
+    if (tx) withCrossProcessLock(stateLockPath, () => {
+      const current = snapshot();
+      ensureCurrent(tx, current);
+      const draft = { ...current };
+      for (const key of Object.keys(defaults)) {
+        if (key !== "revision" && tx.draft[key] !== tx.base[key])
+          draft[key] = tx.draft[key];
+      }
+      tx.base = current;
+      tx.draft = draft;
+      tx.release = release2;
+    });
+    return await fn();
+  } finally {
+    if (!tx?.release) release2();
+  }
+}
+var fieldType = {
+  revision: "number",
+  state: "string",
+  source: "string",
+  genre: "string",
+  stationName: "string",
+  stationIndex: "number",
+  title: "string",
+  volume: "number",
+  spotifyVerifier: "string",
+  podcastFeed: "string",
+  podcastName: "string",
+  episodeIndex: "number"
+};
+function loadStateUnlocked() {
+  if (!existsSync3(stateFilePath)) {
+    Object.assign(now, defaults);
+    return;
+  }
+  let raw = {};
+  try {
+    raw = JSON.parse(readFileSync5(stateFilePath, "utf8"));
+  } catch {
+    process.stderr.write("radiohead: state.json unreadable, resetting to defaults\n");
+    Object.assign(now, defaults);
+    return;
+  }
+  const target = now;
+  for (const key of Object.keys(defaults)) {
+    const got = raw?.[key];
+    if (got === null && defaults[key] === null || typeof got === fieldType[key]) target[key] = got;
+    else target[key] = defaults[key];
+  }
+  if (!Number.isSafeInteger(now.revision) || now.revision < 0) now.revision = 0;
+}
+function saveStateUnlocked() {
+  writeSnapshot({ ...now });
+}
+function writeSnapshot(value) {
+  mkdirSync5(stateDir, { recursive: true });
+  const tmp = `${stateFilePath}.${process.pid}.tmp`;
+  writeFileSync4(tmp, JSON.stringify(value, null, 2));
+  renameSync4(tmp, stateFilePath);
+}
+function saveState() {
+  withCrossProcessLock(stateLockPath, () => saveStateUnlocked());
+}
+function describe2() {
+  if (now.state === "stopped" || !now.source) return "Stopped.";
+  const localSource = now.source === "radio" || now.source === "podcast" || now.source === "hoer";
+  if (localSource && now.state === "playing" && livePlayerCountUnlocked() === 0) {
+    return "Stopped (player exited unexpectedly).";
+  }
+  const what = now.source === "radio" ? `${now.genre} radio \u2014 ${now.stationName}` : now.source === "podcast" ? `Podcast ${now.podcastName ?? "(unknown)"} \u2014 ${now.title ?? "(unknown)"}` : now.source === "hoer" ? `H\xD6R Berlin \u2014 ${now.title ?? "(unknown)"}` : now.source === "applemusic" ? `Apple Music \u2014 ${now.title ?? "(unknown)"}` : `Spotify \u2014 ${now.title ?? "(unknown)"}`;
+  return `${now.state === "paused" ? "Paused" : "Playing"}: ${what} (vol ${now.volume})`;
+}
+
+// src/sources/spotify.ts
 var API = "https://api.spotify.com/v1";
 var AUTH = "https://accounts.spotify.com";
 var REDIRECT = "http://127.0.0.1:8888/callback";
 var SCOPES = "user-read-playback-state user-modify-playback-state playlist-read-private";
-var cfgDir = join7(homedir4(), ".pirate-radio");
-var tokenPath = join7(cfgDir, "spotify.json");
+var cfgDir = join6(homedir2(), ".pirate-radio");
+var tokenPath = join6(cfgDir, "spotify.json");
 function clientId() {
   const id = process.env.SPOTIFY_CLIENT_ID;
   if (!id) throw new Error("Set SPOTIFY_CLIENT_ID (from your Spotify developer app) to use Spotify.");
@@ -16208,20 +16448,22 @@ function b64url(buf) {
   return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 function loadTokens() {
-  if (!existsSync5(tokenPath)) return null;
+  if (!existsSync4(tokenPath)) return null;
   try {
-    return JSON.parse(readFileSync7(tokenPath, "utf8"));
+    return JSON.parse(readFileSync6(tokenPath, "utf8"));
   } catch {
     return null;
   }
 }
 function saveTokens(t) {
-  mkdirSync5(cfgDir, { recursive: true });
-  writeFileSync5(tokenPath, JSON.stringify(t, null, 2), { mode: 384 });
+  mkdirSync6(cfgDir, { recursive: true });
+  const tmp = `${tokenPath}.${process.pid}.tmp`;
+  writeFileSync5(tmp, JSON.stringify(t, null, 2), { mode: 384 });
+  renameSync5(tmp, tokenPath);
 }
 function loginUrl() {
   const v = b64url(randomBytes(48));
-  const challenge = b64url(createHash("sha256").update(v).digest());
+  const challenge = b64url(createHash2("sha256").update(v).digest());
   now.spotifyVerifier = v;
   const p = new URLSearchParams({
     client_id: clientId(),
@@ -16243,7 +16485,7 @@ async function complete(code) {
     client_id: clientId(),
     code_verifier: v
   });
-  const r = await fetch(`${AUTH}/api/token`, {
+  const r = await request(`${AUTH}/api/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body
@@ -16256,40 +16498,31 @@ async function complete(code) {
   saveTokens({ access_token: j.access_token, refresh_token: j.refresh_token, expires_at: Date.now() + ttl * 1e3 });
   now.spotifyVerifier = null;
 }
-var refreshInFlight = null;
 async function accessToken() {
-  const t = loadTokens();
-  if (!t) throw new Error("Not logged in to Spotify. Run spotify_login.");
-  if (Date.now() < t.expires_at - 3e4) return t.access_token;
-  if (refreshInFlight) return refreshInFlight;
-  refreshInFlight = (async () => {
-    try {
-      const body = new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: t.refresh_token,
-        client_id: clientId()
-      });
-      const r = await fetch(`${AUTH}/api/token`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body
-      });
-      if (!r.ok) throw new Error(`Token refresh failed: ${await r.text()}`);
-      const j = await r.json();
-      if (!j.access_token) throw new Error("Token refresh returned no access token \u2014 run spotify_login again.");
-      const ttl = Number(j.expires_in) || 3600;
-      const next4 = { access_token: j.access_token, refresh_token: j.refresh_token ?? t.refresh_token, expires_at: Date.now() + ttl * 1e3 };
-      saveTokens(next4);
-      return next4.access_token;
-    } finally {
-      refreshInFlight = null;
-    }
-  })();
-  return refreshInFlight;
+  const cached2 = loadTokens();
+  if (!cached2) throw new Error("Not logged in to Spotify. Run spotify_login.");
+  if (Date.now() < cached2.expires_at - 3e4) return cached2.access_token;
+  return withAsyncCrossProcessLock(join6(cfgDir, "spotify.lock"), async () => {
+    const t = loadTokens();
+    if (!t) throw new Error("Not logged in to Spotify. Run spotify_login.");
+    if (Date.now() < t.expires_at - 3e4) return t.access_token;
+    const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token: t.refresh_token, client_id: clientId() });
+    const r = await request(`${AUTH}/api/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body
+    });
+    if (!r.ok) throw new Error(`Token refresh failed (${r.status}); run spotify_login again.`);
+    const j = await r.json();
+    if (!j.access_token) throw new Error("Token refresh returned no access token \u2014 run spotify_login again.");
+    const ttl = Number(j.expires_in) || 3600;
+    saveTokens({ access_token: j.access_token, refresh_token: j.refresh_token ?? t.refresh_token, expires_at: Date.now() + ttl * 1e3 });
+    return j.access_token;
+  }, operationSignal());
 }
 async function api(path2, init) {
   const tok = await accessToken();
-  const r = await fetch(`${API}${path2}`, {
+  const r = await request(`${API}${path2}`, {
     ...init,
     headers: { ...init?.headers ?? {}, Authorization: `Bearer ${tok}` }
   });
@@ -16405,8 +16638,10 @@ async function playContext(uriOrName) {
       displayName = best.name;
     }
   }
-  await playWithRecovery(playBody(uri));
-  stop();
+  await playbackEffect(async () => {
+    await playWithRecovery(playBody(uri));
+    stop();
+  });
   now.state = "playing";
   now.source = "spotify";
   now.title = displayName;
@@ -16429,18 +16664,19 @@ async function playWithRecovery(body) {
 }
 async function launchAndWaitForDevice() {
   try {
-    const { execFileSync: execFileSync6 } = await import("node:child_process");
-    execFileSync6("open", ["-a", "Spotify"], { stdio: "ignore", timeout: 8e3 });
+    const { execFileSync: execFileSync5 } = await import("node:child_process");
+    execFileSync5("open", ["-a", "Spotify"], { stdio: "ignore", timeout: 8e3 });
   } catch {
     return null;
   }
   for (let i = 0; i < 6; i++) {
-    await new Promise((res) => setTimeout(res, 2e3));
+    await wait(2e3);
     try {
       const ds = await deviceList();
       const d = ds.find((x) => x.type.toLowerCase() === "computer") ?? ds[0];
       if (d) return d.id;
     } catch {
+      checkCancelled();
     }
   }
   return null;
@@ -16457,7 +16693,7 @@ async function skipNext() {
 async function skipPrev() {
   await api("/me/player/previous", { method: "POST" });
 }
-async function setVolume(percent) {
+async function setVolume2(percent) {
   const p = Math.max(0, Math.min(100, Math.round(percent)));
   await api(`/me/player/volume?volume_percent=${p}`, { method: "PUT" });
 }
@@ -16482,40 +16718,42 @@ async function play2(target) {
   assertMac();
   const t = escapeAS(target.trim());
   if (!t) throw new Error("Give me a playlist, song, or album name from your Music library.");
-  stop();
-  if (now.source === "spotify") {
+  return playbackEffect(async () => {
+    stop();
+    if (now.source === "spotify") {
+      try {
+        await pause();
+      } catch {
+      }
+    }
+    const attempts = [
+      { script: `tell application "Music" to play playlist "${t}"`, kind: "playlist" },
+      { script: `tell application "Music" to play (first track of library playlist 1 whose name contains "${t}")`, kind: "track" },
+      { script: `tell application "Music" to play (first track of library playlist 1 whose album contains "${t}")`, kind: "album" }
+    ];
+    let played = null;
+    for (const a of attempts) {
+      try {
+        osa(a.script);
+        played = a.kind;
+        break;
+      } catch {
+      }
+    }
+    if (!played)
+      throw new Error(
+        `Nothing in your Music library matches "${target}". AppleScript can only play what's already in the library \u2014 add it in Music.app first.`
+      );
+    let title = target;
     try {
-      await pause();
+      title = nowPlayingLine2();
     } catch {
     }
-  }
-  const attempts = [
-    { script: `tell application "Music" to play playlist "${t}"`, kind: "playlist" },
-    { script: `tell application "Music" to play (first track of library playlist 1 whose name contains "${t}")`, kind: "track" },
-    { script: `tell application "Music" to play (first track of library playlist 1 whose album contains "${t}")`, kind: "album" }
-  ];
-  let played = null;
-  for (const a of attempts) {
-    try {
-      osa(a.script);
-      played = a.kind;
-      break;
-    } catch {
-    }
-  }
-  if (!played)
-    throw new Error(
-      `Nothing in your Music library matches "${target}". AppleScript can only play what's already in the library \u2014 add it in Music.app first.`
-    );
-  let title = target;
-  try {
-    title = nowPlayingLine2();
-  } catch {
-  }
-  now.state = "playing";
-  now.source = "applemusic";
-  now.title = title;
-  return `> Apple Music (${played}): ${title}`;
+    now.state = "playing";
+    now.source = "applemusic";
+    now.title = title;
+    return `> Apple Music (${played}): ${title}`;
+  });
 }
 function pauseIfRunning() {
   if (process.platform !== "darwin") return;
@@ -16543,7 +16781,7 @@ function prev() {
   assertMac();
   osa(ifRunning("previous track"));
 }
-function setVolume2(percent) {
+function setVolume3(percent) {
   assertMac();
   const p = Math.max(0, Math.min(100, Math.round(percent)));
   osa(ifRunning(`set sound volume to ${p}`));
@@ -16561,6 +16799,99 @@ function nowPlayingLine2() {
   return out;
 }
 
+// src/stations.ts
+import { readFileSync as readFileSync7 } from "node:fs";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+import { dirname as dirname3, join as join7 } from "node:path";
+var here2 = dirname3(fileURLToPath2(import.meta.url));
+var emptyCatalog = { version: 2, aliases: {}, genres: {} };
+var catalog = emptyCatalog;
+try {
+  const raw = JSON.parse(readFileSync7(join7(here2, "..", "data", "stations.json"), "utf8"));
+  catalog = validateCatalog(raw);
+} catch (e) {
+  process.stderr.write(`radiohead: failed to load stations.json \u2014 ${e.message}
+`);
+}
+function nonEmpty(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+function validateCatalog(value) {
+  if (!value || typeof value !== "object") throw new Error("catalog must be an object");
+  const raw = value;
+  if (raw.version !== 2) throw new Error(`unsupported catalog version: ${String(raw.version)}`);
+  if (!raw.aliases || typeof raw.aliases !== "object" || Array.isArray(raw.aliases))
+    throw new Error("aliases must be an object");
+  if (!raw.genres || typeof raw.genres !== "object" || Array.isArray(raw.genres))
+    throw new Error("genres must be an object");
+  const genres3 = {};
+  const seenUrls = /* @__PURE__ */ new Set();
+  for (const [id, candidate] of Object.entries(raw.genres)) {
+    if (!/^[a-z0-9-]+$/.test(id)) throw new Error(`invalid genre id: ${id}`);
+    if (!candidate || typeof candidate !== "object") throw new Error(`${id}: genre must be an object`);
+    const genre = candidate;
+    if (!nonEmpty(genre.label)) throw new Error(`${id}: label is required`);
+    if (!nonEmpty(genre.description)) throw new Error(`${id}: description is required`);
+    if (!Array.isArray(genre.stations) || genre.stations.length === 0)
+      throw new Error(`${id}: stations must be a non-empty array`);
+    const stations2 = genre.stations.map((candidateStation, index) => {
+      if (!candidateStation || typeof candidateStation !== "object")
+        throw new Error(`${id}[${index}]: station must be an object`);
+      const station = candidateStation;
+      if (!nonEmpty(station.name)) throw new Error(`${id}[${index}]: name is required`);
+      if (!nonEmpty(station.url)) throw new Error(`${id}[${index}]: url is required`);
+      let parsed;
+      try {
+        parsed = new URL(station.url);
+      } catch {
+        throw new Error(`${id}[${index}]: invalid URL`);
+      }
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+        throw new Error(`${id}[${index}]: URL must be HTTP(S)`);
+      if (seenUrls.has(station.url)) throw new Error(`${id}[${index}]: duplicate URL ${station.url}`);
+      seenUrls.add(station.url);
+      return { name: station.name, url: station.url };
+    });
+    genres3[id] = { label: genre.label, description: genre.description, stations: stations2 };
+  }
+  const aliases = {};
+  for (const [alias, target] of Object.entries(raw.aliases)) {
+    if (!/^[a-z0-9-]+$/.test(alias) || !nonEmpty(target)) throw new Error(`invalid alias: ${alias}`);
+    if (genres3[alias]) throw new Error(`alias conflicts with genre: ${alias}`);
+    if (!genres3[target]) throw new Error(`alias ${alias} targets unknown genre ${target}`);
+    aliases[alias] = target;
+  }
+  return { version: 2, aliases, genres: genres3 };
+}
+function all() {
+  return Object.fromEntries(Object.entries(catalog.genres).map(([id, genre]) => [id, genre.stations]));
+}
+function genres() {
+  return Object.keys(catalog.genres);
+}
+function acceptedGenres() {
+  return [...genres(), ...Object.keys(catalog.aliases)];
+}
+function resolveGenre(input) {
+  const id = input.trim().toLowerCase();
+  if (catalog.genres[id]) return id;
+  return catalog.aliases[id] ?? null;
+}
+function genreInfo(id) {
+  const resolved = resolveGenre(id);
+  return resolved ? catalog.genres[resolved] : null;
+}
+var hostCache = null;
+function hosts() {
+  if (hostCache) return hostCache;
+  const set = /* @__PURE__ */ new Set();
+  for (const genre of Object.values(catalog.genres)) {
+    for (const station of genre.stations) set.add(new URL(station.url).host.toLowerCase());
+  }
+  hostCache = [...set];
+  return hostCache;
+}
+
 // src/sources/radio.ts
 var stations = all();
 function genres2() {
@@ -16575,17 +16906,19 @@ function list() {
 async function playGenre(genre, index = 0) {
   const g = resolveGenre(genre);
   if (!g) throw new Error(`Unknown genre "${genre}". Available: ${acceptedGenres().join(", ")}`);
-  if (now.source === "spotify") {
-    try {
-      await pause();
-    } catch {
-    }
-  }
-  if (now.source === "applemusic") pauseIfRunning();
   const len = stations[g].length;
   const i = (Math.trunc(index) % len + len) % len;
   const st = stations[g][i];
-  play(st.url, now.volume);
+  await playbackEffect(async () => {
+    if (now.source === "spotify") {
+      try {
+        await pause();
+      } catch {
+      }
+    }
+    if (now.source === "applemusic") pauseIfRunning();
+    await play(st.url, now.volume);
+  });
   now.state = "playing";
   now.source = "radio";
   now.genre = g;
@@ -16605,6 +16938,34 @@ async function prev2() {
   if (!genre) throw new Error(`Unknown saved genre "${now.genre}".`);
   const len = stations[genre].length;
   return playGenre(genre, (now.stationIndex - 1 + len) % len);
+}
+
+// src/dynhosts.ts
+import { readFileSync as readFileSync8, writeFileSync as writeFileSync6, renameSync as renameSync6, mkdirSync as mkdirSync7, existsSync as existsSync5 } from "node:fs";
+import { join as join8 } from "node:path";
+var dir2 = dataDir();
+var path = join8(dir2, "dynamic-hosts.json");
+var CAP = 20;
+function dynamicHosts() {
+  if (!existsSync5(path)) return [];
+  try {
+    const arr = JSON.parse(readFileSync8(path, "utf8"));
+    return Array.isArray(arr) ? arr.filter((h) => typeof h === "string") : [];
+  } catch {
+    return [];
+  }
+}
+function rememberHost(host) {
+  const h = host.toLowerCase();
+  if (!h) return;
+  try {
+    const next4 = [h, ...dynamicHosts().filter((x) => x !== h)].slice(0, CAP);
+    mkdirSync7(dir2, { recursive: true });
+    const tmp = `${path}.${process.pid}.tmp`;
+    writeFileSync6(tmp, JSON.stringify(next4, null, 2));
+    renameSync6(tmp, path);
+  } catch {
+  }
 }
 
 // src/sources/podcast.ts
@@ -16632,7 +16993,7 @@ function parseFeed(xml) {
   return { channel: textOf(head, "title"), episodes };
 }
 async function fetchText(url) {
-  const r = await fetch(url, { redirect: "follow" });
+  const r = await request(url, { redirect: "follow" });
   if (!r.ok) throw new Error(`Fetch failed (${r.status}) for ${url}`);
   return r.text();
 }
@@ -16651,27 +17012,30 @@ function embeddedDirectUrl(url) {
   }
   return null;
 }
-async function probe(url) {
+async function probe(url, budgetMs = 2500) {
   try {
-    const r = await fetch(url, {
+    const r = await request(url, {
       redirect: "follow",
       headers: { Range: "bytes=0-0", "User-Agent": "Mozilla/5.0" }
-    });
+    }, { probe: true, timeoutMs: Math.min(2500, budgetMs), budgetMs, retries: 0 });
     try {
       await r.body?.cancel();
     } catch {
     }
     return r.ok ? url : null;
   } catch {
+    checkCancelled();
     return null;
   }
 }
 async function resolveDirect(url) {
   const direct = embeddedDirectUrl(url);
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (direct && await probe(direct)) return direct;
-    if (await probe(url)) return url;
-    await new Promise((res) => setTimeout(res, 300));
+  const deadline = Date.now() + 1e4;
+  for (let attempt = 0; attempt < 3 && Date.now() < deadline; attempt++) {
+    if (direct && Date.now() < deadline && await probe(direct, deadline - Date.now())) return direct;
+    if (Date.now() < deadline && await probe(url, deadline - Date.now())) return url;
+    if (Date.now() >= deadline) break;
+    await wait(Math.min(300, deadline - Date.now()));
   }
   return url;
 }
@@ -16689,19 +17053,21 @@ async function playIndex(feedUrl, name, index) {
   if (episodes.length === 0) throw new Error("The feed has no playable episodes (no audio enclosures).");
   const i = Math.max(0, Math.min(index, episodes.length - 1));
   const ep = episodes[i];
-  if (now.source === "spotify") {
-    try {
-      await pause();
-    } catch {
-    }
-  }
-  if (now.source === "applemusic") pauseIfRunning();
   const direct = await resolveDirect(ep.url);
   try {
     rememberHost(new URL(direct).host);
   } catch {
   }
-  play(direct, now.volume);
+  await playbackEffect(async () => {
+    if (now.source === "spotify") {
+      try {
+        await pause();
+      } catch {
+      }
+    }
+    if (now.source === "applemusic") pauseIfRunning();
+    await play(direct, now.volume);
+  });
   const displayName = name ?? channel ?? feedUrl;
   now.state = "playing";
   now.source = "podcast";
@@ -16733,11 +17099,12 @@ async function resume3() {
 }
 
 // src/sources/hoer.ts
-import { execFileSync as execFileSync4 } from "node:child_process";
+import { promisify } from "node:util";
+import { execFile } from "node:child_process";
 var HOME = "https://hoer.live/";
 var UA = { "User-Agent": "Mozilla/5.0" };
 async function currentVideo() {
-  const r = await fetch(HOME, { headers: UA, redirect: "follow" });
+  const r = await request(HOME, { headers: UA, redirect: "follow" });
   if (!r.ok) throw new Error(`hoer.live returned ${r.status}.`);
   const html = await r.text();
   const m = html.match(/videoId:\s*['"]([\w-]{6,20})['"]/);
@@ -16745,13 +17112,13 @@ async function currentVideo() {
   const id = m[1];
   let title = null;
   try {
-    const o = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`);
+    const o = await request(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`);
     if (o.ok) title = (await o.json()).title ?? null;
   } catch {
   }
   return { id, title };
 }
-function resolveAudioUrl(id) {
+async function resolveAudioUrl(id) {
   const args = ["-g", "-f", "bestaudio/best"];
   const cookieFile = process.env.HOER_COOKIES_FILE?.trim();
   const browser = process.env.HOER_COOKIES_FROM_BROWSER?.trim();
@@ -16760,7 +17127,7 @@ function resolveAudioUrl(id) {
   args.push(`https://www.youtube.com/watch?v=${id}`);
   let out;
   try {
-    out = execFileSync4("yt-dlp", args, { encoding: "utf8", timeout: 6e4, windowsHide: true });
+    out = (await promisify(execFile)("yt-dlp", args, { encoding: "utf8", timeout: 3e4, windowsHide: true, signal: operationSignal() })).stdout;
   } catch (e) {
     if (e.code === "ENOENT")
       throw new Error(
@@ -16783,19 +17150,21 @@ function resolveAudioUrl(id) {
 }
 async function play3() {
   const { id, title } = await currentVideo();
-  const url = resolveAudioUrl(id);
-  if (now.source === "spotify") {
-    try {
-      await pause();
-    } catch {
-    }
-  }
-  if (now.source === "applemusic") pauseIfRunning();
+  const url = await resolveAudioUrl(id);
   try {
     rememberHost(new URL(url).host);
   } catch {
   }
-  play(url, now.volume);
+  await playbackEffect(async () => {
+    if (now.source === "spotify") {
+      try {
+        await pause();
+      } catch {
+      }
+    }
+    if (now.source === "applemusic") pauseIfRunning();
+    await play(url, now.volume);
+  });
   now.state = "playing";
   now.source = "hoer";
   now.title = title ?? "H\xD6R Berlin";
@@ -16806,15 +17175,15 @@ async function resume4() {
 }
 
 // src/doctor.ts
-import { execFileSync as execFileSync5 } from "node:child_process";
+import { execFileSync as execFileSync4 } from "node:child_process";
 import { existsSync as existsSync6 } from "node:fs";
-import { homedir as homedir5 } from "node:os";
-import { join as join8 } from "node:path";
+import { homedir as homedir3 } from "node:os";
+import { join as join9 } from "node:path";
 var icon = { ok: "\u2713", warn: "!", fail: "\u2717" };
 function onPath(bin) {
   try {
-    if (process.platform === "win32") execFileSync5("where", [bin], { stdio: "ignore", windowsHide: true });
-    else execFileSync5("sh", ["-c", `command -v ${bin}`], { stdio: "ignore" });
+    if (process.platform === "win32") execFileSync4("where", [bin], { stdio: "ignore", windowsHide: true });
+    else execFileSync4("sh", ["-c", `command -v ${bin}`], { stdio: "ignore" });
     return true;
   } catch {
     return false;
@@ -16833,7 +17202,7 @@ function checkYtDlp() {
 }
 function checkSpotify() {
   const hasId = !!process.env.SPOTIFY_CLIENT_ID;
-  const hasToken = existsSync6(join8(homedir5(), ".pirate-radio", "spotify.json"));
+  const hasToken = existsSync6(join9(homedir3(), ".pirate-radio", "spotify.json"));
   if (!hasId && !hasToken)
     return { level: "warn", label: "Spotify", detail: "not configured \u2014 set SPOTIFY_CLIENT_ID, then /spotify-login (optional)" };
   if (hasId && !hasToken)
@@ -16918,11 +17287,11 @@ ${describe2()}`
     schema: noArgs,
     handler: async () => {
       if (now.source === "spotify") {
-        await skipNext();
+        await playbackEffect(() => skipNext());
         return "Next track.";
       }
       if (now.source === "applemusic") {
-        next();
+        await playbackEffect(() => next());
         return "Next track.";
       }
       if (now.source === "podcast") return next3();
@@ -16937,11 +17306,11 @@ ${describe2()}`
     schema: noArgs,
     handler: async () => {
       if (now.source === "spotify") {
-        await skipPrev();
+        await playbackEffect(() => skipPrev());
         return "Previous track.";
       }
       if (now.source === "applemusic") {
-        prev();
+        await playbackEffect(() => prev());
         return "Previous track.";
       }
       if (now.source === "podcast") return prev3();
@@ -16952,7 +17321,7 @@ ${describe2()}`
   },
   {
     name: "radio_pause",
-    description: "Pause playback (radio/podcast: stops the stream; Spotify/Apple Music: pauses the app).",
+    description: "Pause playback in place via mpv IPC or the remote app; ffplay requires stop instead.",
     schema: noArgs,
     handler: async () => {
       if (now.state === "stopped" && !now.source) {
@@ -16964,28 +17333,24 @@ ${describe2()}`
         now.state = "stopped";
         return "Stopped.";
       }
-      if (now.source === "spotify") {
-        try {
-          await pause();
-        } catch {
-        }
-      } else if (now.source === "applemusic") {
-        try {
-          pause2();
-        } catch {
-        }
-      } else stop();
+      if (now.source === "spotify") await pause();
+      else if (now.source === "applemusic") pause2();
+      else if (!await setPaused(true)) throw new Error("No live player to pause. Use radio_resume to restart.");
       now.state = "paused";
       return "|| Paused.";
     }
   },
   {
     name: "radio_resume",
-    description: "Resume playback (a paused podcast restarts its episode from the top).",
+    description: "Resume a live mpv player at its saved position; restart only if the player has exited.",
     schema: noArgs,
     handler: async () => {
-      if (now.source === "spotify") await resume();
-      else if (now.source === "applemusic") resume2();
+      if (["radio", "podcast", "hoer"].includes(now.source ?? "") && await playbackEffect(() => setPaused(false))) {
+        now.state = "playing";
+        return "> Resumed at the current position.";
+      }
+      if (now.source === "spotify") await playbackEffect(() => resume());
+      else if (now.source === "applemusic") await playbackEffect(() => resume2());
       else if (now.source === "podcast") return resume3();
       else if (now.source === "hoer") return resume4();
       else if (now.source === "radio" && now.genre) await playGenre(now.genre, now.stationIndex);
@@ -16999,17 +17364,9 @@ ${describe2()}`
     description: "Stop playback entirely.",
     schema: noArgs,
     handler: async () => {
-      if (now.source === "spotify") {
-        try {
-          await pause();
-        } catch {
-        }
-      } else if (now.source === "applemusic") {
-        try {
-          stop2();
-        } catch {
-        }
-      } else stop();
+      if (now.source === "spotify") await pause();
+      else if (now.source === "applemusic") stop2();
+      else stop();
       now.state = "stopped";
       now.source = null;
       return "[] Stopped.";
@@ -17037,29 +17394,19 @@ ${describe2()}`
   },
   {
     name: "radio_volume",
-    description: "Set volume 0-100 (applies to radio; restarts the current stream).",
+    description: "Set volume 0-100 without restarting mpv; ffplay requires mpv for live volume control.",
     schema: { type: "object", properties: { level: { type: "number", minimum: 0, maximum: 100 } }, required: ["level"] },
     handler: async (a) => {
       const raw = a.level;
       const level = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : NaN;
       if (!Number.isFinite(level)) throw new Error("Give a volume 0-100, e.g. level=60.");
       now.volume = Math.max(0, Math.min(100, Math.round(level)));
-      if (now.source === "radio" && now.state === "playing" && now.genre)
-        await playGenre(now.genre, now.stationIndex);
-      else if (now.source === "podcast" && now.state === "playing")
-        await resume3();
-      else if (now.source === "hoer" && now.state === "playing")
-        await resume4();
+      if (["radio", "podcast", "hoer"].includes(now.source ?? "") && now.state !== "stopped")
+        await setVolume(now.volume);
       else if (now.source === "spotify" && now.state === "playing") {
-        try {
-          await setVolume(now.volume);
-        } catch {
-        }
+        await setVolume2(now.volume);
       } else if (now.source === "applemusic" && now.state === "playing") {
-        try {
-          setVolume2(now.volume);
-        } catch {
-        }
+        setVolume3(now.volume);
       }
       return `vol ${now.volume}`;
     }
@@ -17093,7 +17440,7 @@ ${loginUrl()}`
     handler: async (a) => {
       const wasAppleMusic = now.source === "applemusic";
       const out = await playContext(String(a.target));
-      if (wasAppleMusic) pauseIfRunning();
+      if (wasAppleMusic) await playbackEffect(() => pauseIfRunning());
       return out;
     }
   },
@@ -17144,39 +17491,44 @@ ${loginUrl()}`
     handler: () => doctor()
   }
 ];
+var mutations = /* @__PURE__ */ new Set(["radio_play", "radio_next", "radio_prev", "radio_pause", "radio_resume", "radio_stop", "radio_volume", "podcast_play", "hoer_play", "music_play", "spotify_play_playlist", "spotify_transfer"]);
+var directEffects = /* @__PURE__ */ new Set(["radio_pause", "radio_stop", "radio_volume", "spotify_transfer"]);
+async function runTool(name, args = {}, signal) {
+  const tool = tools.find((t) => t.name === name);
+  if (!tool) throw new Error(`Unknown tool: ${name}`);
+  return withBudget(() => withState(() => directEffects.has(name) ? playbackEffect(() => tool.handler(args)) : tool.handler(args), mutations.has(name)), signal);
+}
 
 // src/index.ts
 loadState();
-var prevAnchor = readAnchor();
-if (prevAnchor && anchorAlive(prevAnchor)) {
-  process.stderr.write(
-    `radiohead: another server is already running (pid ${prevAnchor.pid}). Refusing to start a second instance.
-`
-  );
+var ourAnchor;
+try {
+  ourAnchor = claimAnchor((old) => {
+    stop(old?.sessionId ?? "legacy");
+    now.state = "stopped";
+    now.source = null;
+    now.spotifyVerifier = null;
+    now.revision++;
+    saveState();
+  });
+} catch (e) {
+  process.stderr.write(`radiohead: ${e.message}. Refusing to start.
+`);
   process.exit(2);
 }
-if (prevAnchor && !anchorAlive(prevAnchor)) {
-  stop();
-  clearAnchor();
-  now.state = "stopped";
-  now.source = null;
-  now.spotifyVerifier = null;
-  saveState();
-}
-writeAnchor(process.pid);
 var cleanedUp = false;
 function cleanup() {
   if (cleanedUp) return;
   cleanedUp = true;
   try {
-    const reg = readRegistryUnsafe(registryPath());
-    for (const p of reg.players) killPid(p.pid);
-    for (const w of reg.watchdogs) killPid(w.pid);
-    for (const pid of findOrphanPlayers(sweepHosts())) killPid(pid);
-    now.state = "stopped";
-    now.source = null;
-    saveStateUnsafe(statePath(), now);
-    clearAnchor();
+    const current = readAnchor();
+    if (current?.sessionId !== ourAnchor.sessionId || current?.pid !== process.pid) return;
+    const raw = readRegistryUnsafe(registryPath());
+    const reg = { players: raw.players.filter((p) => owned(p, ourAnchor.sessionId)), watchdogs: raw.watchdogs.filter((w) => owned(w, ourAnchor.sessionId)) };
+    for (const p of reg.players) killSameProcess(p.pid, p.token);
+    for (const w of reg.watchdogs) killSameProcess(w.pid, w.token);
+    for (const pid of findOrphanPlayers(playerMarker(ourAnchor.sessionId))) killPid(pid);
+    clearAnchor(ourAnchor);
   } catch {
   }
 }
@@ -17210,7 +17562,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.schema }))
   };
 });
-server.setRequestHandler(CallToolRequestSchema, async (req) => {
+server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
   armStdinClose();
   const tool = tools.find((t) => t.name === req.params.name);
   if (!tool) throw new Error(`Unknown tool: ${req.params.name}`);
@@ -17223,7 +17575,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
   }
   try {
-    const out = await withState(() => tool.handler(req.params.arguments ?? {}));
+    const out = await runTool(tool.name, req.params.arguments ?? {}, extra.signal);
     return { content: [{ type: "text", text: out }] };
   } catch (e) {
     return { content: [{ type: "text", text: `Error: ${e.message}` }], isError: true };
