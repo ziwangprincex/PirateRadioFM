@@ -69,10 +69,16 @@ function* acquireSteps(lockPath: string): Generator<void, string> {
       } catch (e) {
         const code = (e as NodeJS.ErrnoException).code;
         const occupied = code === "EEXIST" || code === "ENOTEMPTY";
-        const windowsOccupied = (code === "EPERM" || code === "EACCES") && existsSync(lockPath);
+        // Windows also reports an occupied destination as EPERM/EACCES. Its
+        // owner may release it before we inspect the path, so existsSync here
+        // would turn normal contention into a fatal TOCTOU race. Retry these
+        // ambiguous errors only on Windows and within the same wait budget.
+        const windowsOccupied = process.platform === "win32" && (code === "EPERM" || code === "EACCES");
         if (!occupied && !windowsOccupied) throw e;
+        if (Date.now() >= deadline) {
+          throw new Error(`Timed out waiting for lock: ${lockPath}`, { cause: e });
+        }
       }
-      if (Date.now() >= deadline) throw new Error(`Timed out waiting for lock: ${lockPath}`);
       reclaimDeadOwner(lockPath);
       yield;
     }

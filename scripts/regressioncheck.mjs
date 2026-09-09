@@ -81,7 +81,7 @@ test("watchdog retains interval on cleanup error and exits only after success", 
 
 // Minimal synchronous filesystem used to force the exact stale-observation
 // interleaving without scheduling luck, real sleeps, signals or user files.
-function lockHarness() {
+function lockHarness(platform = "linux") {
   const lock = "/state/players.lock";
   const nodes = new Map([["/", null], ["/state", null]]);
   let beforeUnlink = () => {}, beforeSleep = () => {}, clock = 100_000, uuid = 0;
@@ -120,7 +120,7 @@ function lockHarness() {
     "node:crypto": { randomUUID: () => `00000000-0000-4000-8000-${String(++uuid).padStart(12, "0")}` },
     "./proc.js": { procStartToken: () => "live", sameProcess: (pid) => pid === 201 },
   }, {
-    process: { pid: 201 }, Date: { now: () => clock },
+    process: { pid: 201, platform }, Date: { now: () => clock },
     Atomics: { wait: () => { beforeSleep(); clock += 50; } }, SharedArrayBuffer, Int32Array,
   });
   return { lock, nodes, io, api, onUnlink: (fn) => { beforeUnlink = fn; }, onSleep: (fn) => { beforeSleep = fn; } };
@@ -309,4 +309,43 @@ test("lock surfaces real filesystem errors instead of spinning", () => {
   h.io.renameSync = () => { throw Object.assign(new Error("permission denied"), { code: "EACCES" }); };
   assert.throws(() => h.api.withCrossProcessLock(h.lock, () => assert.fail()), /permission denied/);
   assert.equal([...h.nodes.keys()].some((path) => path.includes(".claim.")), false);
+});
+
+for (const code of ["EPERM", "EACCES"]) {
+  test(`Windows ${code} collision retries after the previous lock disappears`, () => {
+    const h = lockHarness("win32");
+    const rename = h.io.renameSync;
+    let attempts = 0;
+    h.io.renameSync = (from, to) => {
+      if (++attempts === 1) {
+        assert.equal(h.nodes.has(to), false, "previous owner already released its lock");
+        throw Object.assign(new Error("destination was occupied"), { code });
+      }
+      return rename(from, to);
+    };
+    assert.equal(h.api.withCrossProcessLock(h.lock, () => 42), 42);
+    assert.equal(attempts, 2);
+    assert.equal([...h.nodes.keys()].some((path) => path.includes(".claim.")), false);
+  });
+
+  test(`Windows persistent ${code} is bounded and preserves the original error`, () => {
+    const h = lockHarness("win32");
+    const error = Object.assign(new Error("permission denied"), { code });
+    h.io.renameSync = () => { throw error; };
+    assert.throws(() => h.api.withCrossProcessLock(h.lock, () => assert.fail("must not enter")), (e) => {
+      assert.match(e.message, /Timed out/);
+      assert.equal(e.cause, error);
+      return true;
+    });
+    assert.equal([...h.nodes.keys()].some((path) => path.includes(".claim.")), false);
+  });
+}
+
+test("POSIX permission errors are not treated as contention even with a destination", () => {
+  const h = lockHarness("linux");
+  h.nodes.set(h.lock, null);
+  h.nodes.set(`${h.lock}/holder`, "201\nlive");
+  h.io.renameSync = () => { throw Object.assign(new Error("permission denied"), { code: "EACCES" }); };
+  assert.throws(() => h.api.withCrossProcessLock(h.lock, () => assert.fail()), /permission denied/);
+  assert.equal(h.nodes.get(`${h.lock}/holder`), "201\nlive");
 });

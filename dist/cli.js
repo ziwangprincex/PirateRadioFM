@@ -367,10 +367,12 @@ ${procStartToken(process.pid) ?? ""}`);
       } catch (e) {
         const code = e.code;
         const occupied = code === "EEXIST" || code === "ENOTEMPTY";
-        const windowsOccupied = (code === "EPERM" || code === "EACCES") && existsSync(lockPath2);
+        const windowsOccupied = process.platform === "win32" && (code === "EPERM" || code === "EACCES");
         if (!occupied && !windowsOccupied) throw e;
+        if (Date.now() >= deadline) {
+          throw new Error(`Timed out waiting for lock: ${lockPath2}`, { cause: e });
+        }
       }
-      if (Date.now() >= deadline) throw new Error(`Timed out waiting for lock: ${lockPath2}`);
       reclaimDeadOwner(lockPath2);
       yield;
     }
