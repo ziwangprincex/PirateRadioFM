@@ -324,14 +324,20 @@ if (!(await childMain())) {
     const bin = join(home, "bin");
     mkdirSync(bin, { recursive: true });
     const fakePlayer = join(bin, process.platform === "win32" ? "mpv.exe" : "mpv");
-    copyFileSync(process.execPath, fakePlayer);
+    // Linux matches the kernel comm. Node 24 renames its main thread to
+    // "MainThread", so a copied node binary no longer reads as "mpv" there; a
+    // script keeps its own basename as comm. Elsewhere a node copy is fine.
+    const linux = process.platform === "linux";
+    if (linux) writeFileSync(fakePlayer, "#!/bin/sh\nwhile :; do sleep 1; done\n");
+    else copyFileSync(process.execPath, fakePlayer);
     if (process.platform !== "win32") chmodSync(fakePlayer, 0o755);
+    const idle = linux ? [] : ["-e", "setInterval(() => {}, 1000)"];
     const uniqueHost = `lifecycle-${process.pid}-${Date.now()}.invalid`;
     mkdirSync(stateDir(home), { recursive: true });
     writeFileSync(join(stateDir(home), "dynamic-hosts.json"), JSON.stringify([uniqueHost]));
     const marker = `pirate-radio-${createHash("sha256").update(`${stateDir(home)}:legacy`).digest("hex").slice(0, 24)}`;
-    const manual = spawn(fakePlayer, ["-e", "setInterval(() => {}, 1000)", `https://${uniqueHost}/test`], { stdio: "ignore", windowsHide: true });
-    const orphan = spawn(fakePlayer, ["-e", "setInterval(() => {}, 1000)", `https://${uniqueHost}/test`, `--title=${marker}`], {
+    const manual = spawn(fakePlayer, [...idle, `https://${uniqueHost}/test`], { stdio: "ignore", windowsHide: true });
+    const orphan = spawn(fakePlayer, [...idle, `https://${uniqueHost}/test`, `--title=${marker}`], {
       stdio: "ignore", windowsHide: true,
     });
     try {
