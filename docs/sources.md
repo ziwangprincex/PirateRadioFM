@@ -35,7 +35,10 @@ through the same local player pipeline as radio.
 - Episode order: newest = 1, `/next` walks toward older episodes.
 - mpv pause/resume preserves the episode position while the player lives; volume
   changes do not restart playback. If the player exited, resume restarts the episode.
-- ffplay supports playback/stop, but in-place pause and volume require mpv.
+- ffplay supports playback/stop, but in-place pause requires mpv. A `/volume`
+  change under ffplay is saved and applies from the next station/episode.
+- Large feeds are read only up to their first 2MB (the newest episodes); `/next`
+  past the oldest loaded episode reports that instead of replaying it.
 - Session-end cleanup matches session-specific player markers and registered PID
   identities, never unrelated players listening to the same podcast CDN.
 
@@ -109,7 +112,6 @@ no tokens.
 | `src/sources/applemusic.ts` | osascript wrappers, 3-tier library match |
 | `src/sources/spotify.ts` | catalog search, devices/transfer, now-playing, 404 self-heal |
 | `src/sources/hoer.ts` | HÖR homepage scrape, yt-dlp resolution, cookie auth |
-| `src/dynhosts.ts` | podcast CDN host registry for the orphan sweep |
 | `src/tools.ts` | dispatches pause/resume/next/prev/volume/stop on `now.source` |
 
 ## HÖR Berlin
@@ -177,6 +179,5 @@ The cookies.txt method is more reliable.
 1. Fetches `hoer.live`, regex-extracts the embedded YouTube `videoId`.
 2. Calls `yt-dlp -g -f bestaudio/best --cookies <file> <youtube-url>` to
    resolve the direct audio stream URL (HLS manifest or direct link).
-3. Plays the resolved URL through mpv/ffplay at the current volume.
-4. The resolved `googlevideo.com` host is registered with `rememberHost()` so
-   the orphan-sweep (session-end auto-stop) can still kill the player.
+3. Plays the resolved URL through mpv/ffplay at the current volume. Session-end
+   cleanup finds the player by its session marker, like every other local source.

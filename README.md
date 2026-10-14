@@ -62,8 +62,9 @@ pi does not support MCP, so its commands call `dist/cli.js` directly.
 
 mpv uses JSON IPC for pause, resume, and volume without restarting; a paused
 podcast retains its position while the player lives. ffplay remains a playback
-fallback, but pause/live volume report an actionable error rather than silently
-restarting the episode. Install mpv for full controls.
+fallback: pause reports an actionable error rather than silently restarting the
+episode, and a volume change is saved for the next station/episode. Install mpv
+for full controls.
 
 Network work runs outside the state lock. HTTP requests default to an 8-second
 attempt timeout and a 15-second retry budget (at most one retry for reads; writes

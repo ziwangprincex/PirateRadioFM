@@ -31,7 +31,10 @@ v0.2.0 在内置电台之外新增了三类音源。本文说明每一类怎么�
 
 - 集数顺序：最新一集是 1，`/next` 往旧走，`/prev` 往新走。
 - mpv 暂停后续播保留当前进度，调音量不重启；仅当播放器已退出时，恢复才从头播放。
-- ffplay 支持播放和停止；原位暂停、实时调音量需要 mpv。
+- ffplay 支持播放和停止；原位暂停需要 mpv。ffplay 下 `/volume` 会保存设置，
+  从下一个台/下一集开始生效。
+- 很大的 feed 只读取前 2MB（即最新的若干集）；已在最旧一集时 `/next` 会明确提示，
+  不会重播当前这集。
 - 会话结束按播放器专属标记和登记的进程启动标识清理，不会仅因相同 CDN 域名
   影响用户手动启动的播放器。
 
@@ -99,5 +102,4 @@ Token 存在 `~/.pirate-radio/spotify.json`（权限 0600），之后自动刷�
 | `src/sources/podcast.ts` | iTunes 搜索、RSS 解析（无第三方依赖）、按集播放 |
 | `src/sources/applemusic.ts` | osascript 封装、资料库三级匹配 |
 | `src/sources/spotify.ts` | 目录搜索、设备列表/转移、now-playing、404 自愈 |
-| `src/dynhosts.ts` | 播客 CDN 域名登记，供孤儿进程清扫使用 |
 | `src/tools.ts` | 按 `now.source` 分发 pause/resume/next/prev/volume/stop |
