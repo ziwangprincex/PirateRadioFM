@@ -18,7 +18,10 @@ export function hostProcess(): ReturnType<typeof findPiProcess> {
 export function dataDir(): string {
   if (directory) return directory;
   const explicit = process.env.PIRATE_RADIO_SESSION?.trim();
-  const host = explicit ? null : hostProcess();
+  // A watchdog inherits its parent's resolved scope (see sessionEnvironment);
+  // re-detecting the default scope would cost a full process enumeration.
+  const inheritedDefault = !explicit && process.env.PIRATE_RADIO_DEFAULT_SCOPE === "1";
+  const host = explicit || inheritedDefault ? null : hostProcess();
   const key = explicit || (host ? `pi:${host.pid}:${host.token ?? ""}` : "");
   scopeKey = key;
   directory = key ? join(root, "sessions", createHash("sha256").update(key).digest("hex").slice(0, 24)) : root;
@@ -74,6 +77,9 @@ export function playerMarker(id = sessionId()): string {
 
 export function sessionEnvironment(): NodeJS.ProcessEnv {
   dataDir();
-  return { ...process.env, PIRATE_RADIO_SESSION: scopeKey };
+  const env: NodeJS.ProcessEnv = { ...process.env, PIRATE_RADIO_SESSION: scopeKey };
+  if (scopeKey) delete env.PIRATE_RADIO_DEFAULT_SCOPE;
+  else env.PIRATE_RADIO_DEFAULT_SCOPE = "1";
+  return env;
 }
 export function bindSession(id: string): void { boundSession = id; }

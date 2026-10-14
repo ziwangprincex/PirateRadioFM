@@ -199,9 +199,6 @@ export function saveState(): void {
   withCrossProcessLock(stateLockPath, () => saveStateUnlocked());
 }
 
-// Exposed for the lock-free cleanup path in index.ts.
-export function statePath(): string { return stateFilePath; }
-
 export function describe(): string {
   if (now.state === "stopped" || !now.source) return "Stopped.";
   // Reconcile with reality for the local-player paths (radio, podcast): if the

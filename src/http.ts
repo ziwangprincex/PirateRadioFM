@@ -18,7 +18,9 @@ export async function wait(ms: number): Promise<void> {
   await delay(ms, undefined, { signal: operationSignal() });
 }
 
-interface HttpOptions { timeoutMs?: number; budgetMs?: number; retries?: number; maxBytes?: number; probe?: boolean; }
+// truncate: keep the first maxBytes of an oversized body instead of failing.
+// Podcast feeds need only their newest items, but popular ones exceed 20MB.
+interface HttpOptions { timeoutMs?: number; budgetMs?: number; retries?: number; maxBytes?: number; truncate?: boolean; probe?: boolean; }
 // Buffer small API/feed bodies inside the request deadline. Returning fetch's
 // raw Response would let a server stall .text()/.json() after headers forever.
 export async function request(url: string, init: RequestInit = {}, options: HttpOptions = {}): Promise<Response> {
@@ -57,8 +59,14 @@ export async function request(url: string, init: RequestInit = {}, options: Http
             for (;;) {
               const part = await reader.read();
               if (part.done) break;
+              const limit = options.maxBytes ?? 4 * 1024 * 1024;
+              if (size + part.value.length > limit) {
+                if (!options.truncate) throw new Error("HTTP response exceeds size limit");
+                chunks.push(part.value.subarray(0, limit - size));
+                await reader.cancel().catch(() => {});
+                break;
+              }
               size += part.value.length;
-              if (size > (options.maxBytes ?? 4 * 1024 * 1024)) throw new Error("HTTP response exceeds size limit");
               chunks.push(part.value);
             }
           } catch (e) { await reader.cancel().catch(() => {}); throw e; }

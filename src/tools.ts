@@ -8,6 +8,7 @@ import * as hoer from "./sources/hoer.js";
 import * as player from "./player.js";
 import { now, describe, playbackEffect, withState } from "./state.js";
 import { doctor } from "./doctor.js";
+import { aliases } from "./stations.js";
 
 type Handler = (args: any) => Promise<string> | string;
 interface Tool { name: string; description: string; schema: any; handler: Handler; }
@@ -24,9 +25,20 @@ export const tools: Tool[] = [
   {
     name: "radio_play",
     // Genre list derived from the station data so it never drifts out of sync.
-    description: `Play a built-in genre radio station. Genres: ${radio.genres().join(", ")}. Compatibility aliases: lofi, npr.`,
-    schema: { type: "object", properties: { genre: { type: "string" } }, required: ["genre"] },
+    description: `Play a built-in genre radio station. Genres: ${radio.genres().join(", ")}. Compatibility aliases: ${Object.keys(aliases()).join(", ")}.`,
+    schema: {
+      type: "object",
+      properties: {
+        genre: { type: "string" },
+        resumePaused: { type: "boolean", description: "If playback is paused, resume it instead of starting this genre." },
+      },
+      required: ["genre"],
+    },
     handler: async (a) => {
+      // /play means "resume if paused". Slash commands execute before the model
+      // reads the prompt, so that choice has to be made here, not in prose.
+      if ((a.resumePaused === true || a.resumePaused === "true") && now.state === "paused" && now.source)
+        return resumePlayback();
       const st = await radio.playGenre(String(a.genre));
       return `> ${now.genre} — ${st.name}`;
     },
@@ -85,33 +97,27 @@ export const tools: Tool[] = [
     name: "radio_resume",
     description: "Resume a live mpv player at its saved position; restart only if the player has exited.",
     schema: noArgs,
-    handler: async () => {
-      if (["radio", "podcast", "hoer"].includes(now.source ?? "") &&
-          await playbackEffect(() => player.setPaused(false))) {
-        now.state = "playing";
-        return "> Resumed at the current position.";
-      }
-      if (now.source === "spotify") await playbackEffect(() => spotify.resume());
-      else if (now.source === "applemusic") await playbackEffect(() => applemusic.resume());
-      else if (now.source === "podcast") return podcast.resume();
-      else if (now.source === "hoer") return hoer.resume();
-      else if (now.source === "radio" && now.genre) await radio.playGenre(now.genre, now.stationIndex);
-      else throw new Error("Nothing to resume. Use radio_play, podcast_play, spotify_play_playlist, or music_play.");
-      now.state = "playing";
-      return "> Resumed.";
-    },
+    handler: () => resumePlayback(),
   },
   {
     name: "radio_stop",
     description: "Stop playback entirely.",
     schema: noArgs,
     handler: async () => {
-      if (now.source === "spotify") await spotify.pause();
-      else if (now.source === "applemusic") applemusic.stop();
-      else player.stop();
+      // The user's intent wins over remote success: local players always die and
+      // the state always says stopped. A failed Spotify/Music.app call (offline,
+      // expired token, no device) is reported, not allowed to roll the stop back.
+      player.stop();
+      let warning = "";
+      try {
+        if (now.source === "spotify") await spotify.pause();
+        else if (now.source === "applemusic") applemusic.stop();
+      } catch (e) {
+        warning = ` (${now.source === "spotify" ? "Spotify" : "Music.app"} did not confirm: ${(e as Error).message})`;
+      }
       now.state = "stopped";
       now.source = null;
-      return "[] Stopped.";
+      return `[] Stopped.${warning}`;
     },
   },
   {
@@ -145,9 +151,12 @@ export const tools: Tool[] = [
             : NaN;
       if (!Number.isFinite(level)) throw new Error("Give a volume 0-100, e.g. level=60.");
       now.volume = Math.max(0, Math.min(100, Math.round(level)));
-      if (["radio", "podcast", "hoer"].includes(now.source ?? "") && now.state !== "stopped")
-        await player.setVolume(now.volume);
-      else if (now.source === "spotify" && now.state === "playing") {
+      if (["radio", "podcast", "hoer"].includes(now.source ?? "") && now.state !== "stopped") {
+        // ffplay has no control channel. Keep the new level for the next
+        // station/episode rather than rejecting the change outright.
+        if (!(await player.setVolume(now.volume)))
+          return `vol ${now.volume} (applies from the next station/episode — ffplay can't change volume live; install mpv)`;
+      } else if (now.source === "spotify" && now.state === "playing") {
         await spotify.setVolume(now.volume);
       } else if (now.source === "applemusic" && now.state === "playing") {
         applemusic.setVolume(now.volume);
@@ -245,6 +254,22 @@ export const tools: Tool[] = [
     handler: () => doctor(),
   },
 ];
+
+async function resumePlayback(): Promise<string> {
+  if (["radio", "podcast", "hoer"].includes(now.source ?? "") &&
+      await playbackEffect(() => player.setPaused(false))) {
+    now.state = "playing";
+    return "> Resumed at the current position.";
+  }
+  if (now.source === "spotify") await playbackEffect(() => spotify.resume());
+  else if (now.source === "applemusic") await playbackEffect(() => applemusic.resume());
+  else if (now.source === "podcast") return podcast.resume();
+  else if (now.source === "hoer") return hoer.resume();
+  else if (now.source === "radio" && now.genre) await radio.playGenre(now.genre, now.stationIndex);
+  else throw new Error("Nothing to resume. Use radio_play, podcast_play, spotify_play_playlist, or music_play.");
+  now.state = "playing";
+  return "> Resumed.";
+}
 
 const mutations = new Set(["radio_play", "radio_next", "radio_prev", "radio_pause", "radio_resume", "radio_stop", "radio_volume", "podcast_play", "hoer_play", "music_play", "spotify_play_playlist", "spotify_transfer"]);
 const directEffects = new Set(["radio_pause", "radio_stop", "radio_volume", "spotify_transfer"]);

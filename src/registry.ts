@@ -127,20 +127,6 @@ export function removeWatchdog(pid: number): void {
 export function owned(entry: ProcEntry, id = sessionId()): boolean {
   return (entry.sessionId ?? "legacy") === id;
 }
-export function drainPlayers(id = sessionId()): ProcEntry[] {
-  return withLock((r) => {
-    const mine = prune(r.players.filter((e) => owned(e, id)));
-    r.players = r.players.filter((e) => !owned(e, id));
-    return mine;
-  });
-}
-export function drainWatchdogs(id = sessionId()): ProcEntry[] {
-  return withLock((r) => {
-    const mine = prune(r.watchdogs.filter((e) => owned(e, id)));
-    r.watchdogs = r.watchdogs.filter((e) => !owned(e, id));
-    return mine;
-  });
-}
 export function drainAll(id = sessionId()): Registry {
   return withLock((r) => {
     const players = prune(r.players.filter((e) => owned(e, id)));

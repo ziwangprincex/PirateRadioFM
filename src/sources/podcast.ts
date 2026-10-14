@@ -9,7 +9,6 @@ import { now, playbackEffect } from "../state.js";
 import * as player from "../player.js";
 import * as spotify from "./spotify.js";
 import * as applemusic from "./applemusic.js";
-import { rememberHost } from "../dynhosts.js";
 
 export interface Episode { title: string; url: string; }
 
@@ -48,8 +47,13 @@ export function parseFeed(xml: string): { channel: string | null; episodes: Epis
   return { channel: textOf(head, "title"), episodes };
 }
 
-async function fetchText(url: string): Promise<string> {
-  const r = await request(url, { redirect: "follow" });
+// Feeds are newest-first and only the first MAX_EPISODES items matter, but
+// popular shows publish 5-20MB of history. Keep the head instead of failing;
+// parseFeed only matches complete <item> blocks, so a cut-off tail is ignored.
+const FEED_HEAD_BYTES = 2 * 1024 * 1024;
+
+async function fetchText(url: string, feed = false): Promise<string> {
+  const r = await request(url, { redirect: "follow" }, feed ? { maxBytes: FEED_HEAD_BYTES, truncate: true } : {});
   if (!r.ok) throw new Error(`Fetch failed (${r.status}) for ${url}`);
   return r.text();
 }
@@ -121,13 +125,14 @@ async function resolveFeed(target: string): Promise<{ feedUrl: string; name: str
 }
 
 // Play episode `index` (0 = newest) of the feed in `now.podcastFeed`.
-async function playIndex(feedUrl: string, name: string | null, index: number): Promise<string> {
-  const { channel, episodes } = parseFeed(await fetchText(feedUrl));
+async function playIndex(feedUrl: string, name: string | null, index: number, strict = false): Promise<string> {
+  const { channel, episodes } = parseFeed(await fetchText(feedUrl, true));
   if (episodes.length === 0) throw new Error("The feed has no playable episodes (no audio enclosures).");
+  // Stepping past the end must not silently replay the current episode.
+  if (strict && index >= episodes.length) throw new Error(`Already at the oldest episode (${episodes.length} available).`);
   const i = Math.max(0, Math.min(index, episodes.length - 1));
   const ep = episodes[i];
   const direct = await resolveDirect(ep.url);
-  try { rememberHost(new URL(direct).host); } catch { /* odd URL — sweep just won't cover it */ }
   await playbackEffect(async () => {
     // Silence remote sources before starting the local stream (same rationale as
     // radio.playGenre); player.play() itself kills any previous local player.
@@ -161,7 +166,7 @@ function requireCurrent(): string {
 
 // next = one episode OLDER (down the newest-first list), prev = one newer.
 export async function next(): Promise<string> {
-  return playIndex(requireCurrent(), now.podcastName, now.episodeIndex + 1);
+  return playIndex(requireCurrent(), now.podcastName, now.episodeIndex + 1, true);
 }
 
 export async function prev(): Promise<string> {

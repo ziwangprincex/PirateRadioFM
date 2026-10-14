@@ -3,4 +3,8 @@ description: Play a Spotify playlist by name or URI (usage — /spotify-play <na
 argument-hint: "<name-or-uri>"
 allowed-tools: Bash(node:*)
 ---
-!`node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" spotify_play_playlist target=$ARGUMENTS`
+```!
+node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" spotify_play_playlist --stdin=target <<'PIRATE_RADIO_ARGS'
+$ARGUMENTS
+PIRATE_RADIO_ARGS
+```

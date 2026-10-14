@@ -123,14 +123,6 @@ export function readRegistryUnsafe(registryPath: string): { players: Array<{ pid
   }
 }
 
-export function saveStateUnsafe(statePath: string, data: unknown): void {
-  try {
-    const tmp = `${statePath}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify(data, null, 2));
-    renameSync(tmp, statePath);
-  } catch { /* best effort */ }
-}
-
 // Async effect serialization must not block the event loop while another
 // command awaits network/IPC. State and registry locks remain short and sync.
 export async function acquireAsyncCrossProcessLock(path: string, signal?: AbortSignal): Promise<() => void> {

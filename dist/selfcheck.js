@@ -3,8 +3,8 @@ import { createRequire as __cr } from 'node:module'; const require = __cr(import
 // src/selfcheck.ts
 import { test } from "node:test";
 import assert from "node:assert";
-import { readdirSync as readdirSync2, readFileSync as readFileSync9 } from "node:fs";
-import { dirname as dirname4, join as join10 } from "node:path";
+import { readdirSync as readdirSync2, readFileSync as readFileSync8 } from "node:fs";
+import { dirname as dirname4, join as join9 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // src/player.ts
@@ -40,8 +40,16 @@ function pidAlive(pid) {
     return e.code === "EPERM";
   }
 }
+var selfToken;
 function procStartToken(pid) {
   if (lifecycleTestMode) return null;
+  if (pid === process.pid) {
+    if (selfToken === void 0) selfToken = readStartToken(pid);
+    return selfToken;
+  }
+  return readStartToken(pid);
+}
+function readStartToken(pid) {
   if (!pidAlive(pid)) return null;
   try {
     if (process.platform === "linux") {
@@ -323,15 +331,15 @@ function withCrossProcessLock(lockPath2, fn) {
     throw e;
   }
 }
-async function acquireAsyncCrossProcessLock(path2, signal) {
-  const steps = acquireSteps(path2);
+async function acquireAsyncCrossProcessLock(path, signal) {
+  const steps = acquireSteps(path);
   try {
     for (; ; ) {
       signal?.throwIfAborted();
       const step = steps.next();
       if (step.done) {
         const owner = step.value;
-        return () => release(path2, owner);
+        return () => release(path, owner);
       }
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
@@ -339,8 +347,8 @@ async function acquireAsyncCrossProcessLock(path2, signal) {
     steps.return("");
   }
 }
-async function withAsyncCrossProcessLock(path2, fn, signal) {
-  const release2 = await acquireAsyncCrossProcessLock(path2, signal);
+async function withAsyncCrossProcessLock(path, fn, signal) {
+  const release2 = await acquireAsyncCrossProcessLock(path, signal);
   try {
     signal?.throwIfAborted();
     return await fn();
@@ -362,7 +370,8 @@ function hostProcess() {
 function dataDir() {
   if (directory) return directory;
   const explicit = process.env.PIRATE_RADIO_SESSION?.trim();
-  const host = explicit ? null : hostProcess();
+  const inheritedDefault = !explicit && process.env.PIRATE_RADIO_DEFAULT_SCOPE === "1";
+  const host = explicit || inheritedDefault ? null : hostProcess();
   const key = explicit || (host ? `pi:${host.pid}:${host.token ?? ""}` : "");
   scopeKey = key;
   directory = key ? join2(root, "sessions", createHash("sha256").update(key).digest("hex").slice(0, 24)) : root;
@@ -389,7 +398,10 @@ function playerMarker(id = sessionId()) {
 }
 function sessionEnvironment() {
   dataDir();
-  return { ...process.env, PIRATE_RADIO_SESSION: scopeKey };
+  const env = { ...process.env, PIRATE_RADIO_SESSION: scopeKey };
+  if (scopeKey) delete env.PIRATE_RADIO_DEFAULT_SCOPE;
+  else env.PIRATE_RADIO_DEFAULT_SCOPE = "1";
+  return env;
 }
 
 // src/registry.ts
@@ -534,8 +546,15 @@ async function request(url, init = {}, options = {}) {
             for (; ; ) {
               const part = await reader.read();
               if (part.done) break;
+              const limit = options.maxBytes ?? 4 * 1024 * 1024;
+              if (size + part.value.length > limit) {
+                if (!options.truncate) throw new Error("HTTP response exceeds size limit");
+                chunks.push(part.value.subarray(0, limit - size));
+                await reader.cancel().catch(() => {
+                });
+                break;
+              }
               size += part.value.length;
-              if (size > (options.maxBytes ?? 4 * 1024 * 1024)) throw new Error("HTTP response exceeds size limit");
               chunks.push(part.value);
             }
           } catch (e) {
@@ -561,11 +580,11 @@ async function request(url, init = {}, options = {}) {
 }
 
 // src/ipc.ts
-async function mpvCommand(path2, command, timeoutMs = 1500, signal = operationSignal()) {
+async function mpvCommand(path, command, timeoutMs = 1500, signal = operationSignal()) {
   signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
     const id = randomInt(1, 2147483647);
-    const socket = createConnection(path2);
+    const socket = createConnection(path);
     let buffer = "", settled = false;
     const finish = (error, data) => {
       if (settled) return;
@@ -648,9 +667,9 @@ var here = dirname2(fileURLToPath(import.meta.url));
 function ipcPath() {
   const id = randomUUID3();
   if (process.platform === "win32") return `\\\\.\\pipe\\pirate-radio-${id}`;
-  const dir3 = join4(tmpdir(), `pr-${process.getuid?.() ?? "user"}`);
-  mkdirSync4(dir3, { recursive: true, mode: 448 });
-  return join4(dir3, `${id}.sock`);
+  const dir2 = join4(tmpdir(), `pr-${process.getuid?.() ?? "user"}`);
+  mkdirSync4(dir2, { recursive: true, mode: 448 });
+  return join4(dir2, `${id}.sock`);
 }
 async function play(url, volume) {
   checkCancelled();
@@ -726,11 +745,12 @@ async function setPaused(paused) {
 }
 async function setVolume(volume) {
   const players = livePlayers();
-  if (players.some((p) => !p.ipc)) throw new Error("Live volume control requires mpv; ffplay is not restarted automatically.");
+  if (players.some((p) => !p.ipc)) return false;
   for (const p of players) {
     if (!sameProcess(p.pid, p.token)) throw new Error("Player exited");
     await mpvCommand(p.ipc, ["set_property", "volume", volume]);
   }
+  return true;
 }
 function spawnWatchdog(playerPid) {
   const anchor = readAnchor();
@@ -982,9 +1002,9 @@ async function accessToken() {
     return j.access_token;
   }, operationSignal());
 }
-async function api(path2, init) {
+async function api(path, init) {
   const tok = await accessToken();
-  const r = await request(`${API}${path2}`, {
+  const r = await request(`${API}${path}`, {
     ...init,
     headers: { ...init?.headers ?? {}, Authorization: `Bearer ${tok}` }
   });
@@ -1181,13 +1201,6 @@ async function play2(target) {
   const t = escapeAS(target.trim());
   if (!t) throw new Error("Give me a playlist, song, or album name from your Music library.");
   return playbackEffect(async () => {
-    stop();
-    if (now.source === "spotify") {
-      try {
-        await pause();
-      } catch {
-      }
-    }
     const attempts = [
       { script: `tell application "Music" to play playlist "${t}"`, kind: "playlist" },
       { script: `tell application "Music" to play (first track of library playlist 1 whose name contains "${t}")`, kind: "track" },
@@ -1206,6 +1219,13 @@ async function play2(target) {
       throw new Error(
         `Nothing in your Music library matches "${target}". AppleScript can only play what's already in the library \u2014 add it in Music.app first.`
       );
+    stop();
+    if (now.source === "spotify") {
+      try {
+        await pause();
+      } catch {
+      }
+    }
     let title = target;
     try {
       title = nowPlayingLine2();
@@ -1316,20 +1336,23 @@ function validateCatalog(value) {
     });
     genres3[id] = { label: genre.label, description: genre.description, stations: stations2 };
   }
-  const aliases = {};
+  const aliases2 = {};
   for (const [alias, target] of Object.entries(raw.aliases)) {
     if (!/^[a-z0-9-]+$/.test(alias) || !nonEmpty(target)) throw new Error(`invalid alias: ${alias}`);
     if (genres3[alias]) throw new Error(`alias conflicts with genre: ${alias}`);
     if (!genres3[target]) throw new Error(`alias ${alias} targets unknown genre ${target}`);
-    aliases[alias] = target;
+    aliases2[alias] = target;
   }
-  return { version: 2, aliases, genres: genres3 };
+  return { version: 2, aliases: aliases2, genres: genres3 };
 }
 function all() {
   return Object.fromEntries(Object.entries(catalog.genres).map(([id, genre]) => [id, genre.stations]));
 }
 function genres() {
   return Object.keys(catalog.genres);
+}
+function aliases() {
+  return { ...catalog.aliases };
 }
 function acceptedGenres() {
   return [...genres(), ...Object.keys(catalog.aliases)];
@@ -1435,34 +1458,6 @@ function parseArgs(rest, schema) {
   return args;
 }
 
-// src/dynhosts.ts
-import { readFileSync as readFileSync8, writeFileSync as writeFileSync6, renameSync as renameSync6, mkdirSync as mkdirSync7, existsSync as existsSync5 } from "node:fs";
-import { join as join8 } from "node:path";
-var dir2 = dataDir();
-var path = join8(dir2, "dynamic-hosts.json");
-var CAP = 20;
-function dynamicHosts() {
-  if (!existsSync5(path)) return [];
-  try {
-    const arr = JSON.parse(readFileSync8(path, "utf8"));
-    return Array.isArray(arr) ? arr.filter((h) => typeof h === "string") : [];
-  } catch {
-    return [];
-  }
-}
-function rememberHost(host) {
-  const h = host.toLowerCase();
-  if (!h) return;
-  try {
-    const next4 = [h, ...dynamicHosts().filter((x) => x !== h)].slice(0, CAP);
-    mkdirSync7(dir2, { recursive: true });
-    const tmp = `${path}.${process.pid}.tmp`;
-    writeFileSync6(tmp, JSON.stringify(next4, null, 2));
-    renameSync6(tmp, path);
-  } catch {
-  }
-}
-
 // src/sources/podcast.ts
 var MAX_EPISODES = 50;
 function decodeEntities(s) {
@@ -1487,8 +1482,9 @@ function parseFeed(xml) {
   const head = items.length ? xml.slice(0, xml.search(/<item[\s>]/i)) : xml;
   return { channel: textOf(head, "title"), episodes };
 }
-async function fetchText(url) {
-  const r = await request(url, { redirect: "follow" });
+var FEED_HEAD_BYTES = 2 * 1024 * 1024;
+async function fetchText(url, feed = false) {
+  const r = await request(url, { redirect: "follow" }, feed ? { maxBytes: FEED_HEAD_BYTES, truncate: true } : {});
   if (!r.ok) throw new Error(`Fetch failed (${r.status}) for ${url}`);
   return r.text();
 }
@@ -1543,16 +1539,13 @@ async function resolveFeed(target) {
   if (!hit) throw new Error(`No podcast found for "${target}". Try a different name or paste an RSS URL.`);
   return { feedUrl: hit.feedUrl, name: hit.collectionName ?? null };
 }
-async function playIndex(feedUrl, name, index) {
-  const { channel, episodes } = parseFeed(await fetchText(feedUrl));
+async function playIndex(feedUrl, name, index, strict = false) {
+  const { channel, episodes } = parseFeed(await fetchText(feedUrl, true));
   if (episodes.length === 0) throw new Error("The feed has no playable episodes (no audio enclosures).");
+  if (strict && index >= episodes.length) throw new Error(`Already at the oldest episode (${episodes.length} available).`);
   const i = Math.max(0, Math.min(index, episodes.length - 1));
   const ep = episodes[i];
   const direct = await resolveDirect(ep.url);
-  try {
-    rememberHost(new URL(direct).host);
-  } catch {
-  }
   await playbackEffect(async () => {
     if (now.source === "spotify") {
       try {
@@ -1583,7 +1576,7 @@ function requireCurrent() {
   return now.podcastFeed;
 }
 async function next3() {
-  return playIndex(requireCurrent(), now.podcastName, now.episodeIndex + 1);
+  return playIndex(requireCurrent(), now.podcastName, now.episodeIndex + 1, true);
 }
 async function prev3() {
   if (now.episodeIndex <= 0) throw new Error("Already at the newest episode.");
@@ -1646,10 +1639,6 @@ async function resolveAudioUrl(id) {
 async function play3() {
   const { id, title } = await currentVideo();
   const url = await resolveAudioUrl(id);
-  try {
-    rememberHost(new URL(url).host);
-  } catch {
-  }
   await playbackEffect(async () => {
     if (now.source === "spotify") {
       try {
@@ -1671,9 +1660,9 @@ async function resume4() {
 
 // src/doctor.ts
 import { execFileSync as execFileSync4 } from "node:child_process";
-import { existsSync as existsSync6 } from "node:fs";
+import { existsSync as existsSync5 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
-import { join as join9 } from "node:path";
+import { join as join8 } from "node:path";
 var icon = { ok: "\u2713", warn: "!", fail: "\u2717" };
 function onPath(bin) {
   try {
@@ -1697,7 +1686,7 @@ function checkYtDlp() {
 }
 function checkSpotify() {
   const hasId = !!process.env.SPOTIFY_CLIENT_ID;
-  const hasToken = existsSync6(join9(homedir3(), ".pirate-radio", "spotify.json"));
+  const hasToken = existsSync5(join8(homedir3(), ".pirate-radio", "spotify.json"));
   if (!hasId && !hasToken)
     return { level: "warn", label: "Spotify", detail: "not configured \u2014 set SPOTIFY_CLIENT_ID, then /spotify-login (optional)" };
   if (hasId && !hasToken)
@@ -1769,9 +1758,18 @@ ${describe()}`
   {
     name: "radio_play",
     // Genre list derived from the station data so it never drifts out of sync.
-    description: `Play a built-in genre radio station. Genres: ${genres2().join(", ")}. Compatibility aliases: lofi, npr.`,
-    schema: { type: "object", properties: { genre: { type: "string" } }, required: ["genre"] },
+    description: `Play a built-in genre radio station. Genres: ${genres2().join(", ")}. Compatibility aliases: ${Object.keys(aliases()).join(", ")}.`,
+    schema: {
+      type: "object",
+      properties: {
+        genre: { type: "string" },
+        resumePaused: { type: "boolean", description: "If playback is paused, resume it instead of starting this genre." }
+      },
+      required: ["genre"]
+    },
     handler: async (a) => {
+      if ((a.resumePaused === true || a.resumePaused === "true") && now.state === "paused" && now.source)
+        return resumePlayback();
       const st = await playGenre(String(a.genre));
       return `> ${now.genre} \u2014 ${st.name}`;
     }
@@ -1839,32 +1837,24 @@ ${describe()}`
     name: "radio_resume",
     description: "Resume a live mpv player at its saved position; restart only if the player has exited.",
     schema: noArgs,
-    handler: async () => {
-      if (["radio", "podcast", "hoer"].includes(now.source ?? "") && await playbackEffect(() => setPaused(false))) {
-        now.state = "playing";
-        return "> Resumed at the current position.";
-      }
-      if (now.source === "spotify") await playbackEffect(() => resume());
-      else if (now.source === "applemusic") await playbackEffect(() => resume2());
-      else if (now.source === "podcast") return resume3();
-      else if (now.source === "hoer") return resume4();
-      else if (now.source === "radio" && now.genre) await playGenre(now.genre, now.stationIndex);
-      else throw new Error("Nothing to resume. Use radio_play, podcast_play, spotify_play_playlist, or music_play.");
-      now.state = "playing";
-      return "> Resumed.";
-    }
+    handler: () => resumePlayback()
   },
   {
     name: "radio_stop",
     description: "Stop playback entirely.",
     schema: noArgs,
     handler: async () => {
-      if (now.source === "spotify") await pause();
-      else if (now.source === "applemusic") stop2();
-      else stop();
+      stop();
+      let warning = "";
+      try {
+        if (now.source === "spotify") await pause();
+        else if (now.source === "applemusic") stop2();
+      } catch (e) {
+        warning = ` (${now.source === "spotify" ? "Spotify" : "Music.app"} did not confirm: ${e.message})`;
+      }
       now.state = "stopped";
       now.source = null;
-      return "[] Stopped.";
+      return `[] Stopped.${warning}`;
     }
   },
   {
@@ -1896,9 +1886,10 @@ ${describe()}`
       const level = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : NaN;
       if (!Number.isFinite(level)) throw new Error("Give a volume 0-100, e.g. level=60.");
       now.volume = Math.max(0, Math.min(100, Math.round(level)));
-      if (["radio", "podcast", "hoer"].includes(now.source ?? "") && now.state !== "stopped")
-        await setVolume(now.volume);
-      else if (now.source === "spotify" && now.state === "playing") {
+      if (["radio", "podcast", "hoer"].includes(now.source ?? "") && now.state !== "stopped") {
+        if (!await setVolume(now.volume))
+          return `vol ${now.volume} (applies from the next station/episode \u2014 ffplay can't change volume live; install mpv)`;
+      } else if (now.source === "spotify" && now.state === "playing") {
         await setVolume2(now.volume);
       } else if (now.source === "applemusic" && now.state === "playing") {
         setVolume3(now.volume);
@@ -1986,6 +1977,20 @@ ${loginUrl()}`
     handler: () => doctor()
   }
 ];
+async function resumePlayback() {
+  if (["radio", "podcast", "hoer"].includes(now.source ?? "") && await playbackEffect(() => setPaused(false))) {
+    now.state = "playing";
+    return "> Resumed at the current position.";
+  }
+  if (now.source === "spotify") await playbackEffect(() => resume());
+  else if (now.source === "applemusic") await playbackEffect(() => resume2());
+  else if (now.source === "podcast") return resume3();
+  else if (now.source === "hoer") return resume4();
+  else if (now.source === "radio" && now.genre) await playGenre(now.genre, now.stationIndex);
+  else throw new Error("Nothing to resume. Use radio_play, podcast_play, spotify_play_playlist, or music_play.");
+  now.state = "playing";
+  return "> Resumed.";
+}
 
 // src/selfcheck.ts
 test("station catalog: exact genres, aliases, and schema version", () => {
@@ -2029,11 +2034,11 @@ test("hosts() is non-empty and unique", () => {
   assert.strictEqual(new Set(h).size, h.length, "hosts() has duplicates");
 });
 test("all orphan sweep sites require a session-specific marker, never a host", () => {
-  const src = join10(dirname4(fileURLToPath3(import.meta.url)), "..", "src");
+  const src = join9(dirname4(fileURLToPath3(import.meta.url)), "..", "src");
   for (const file of ["player.ts", "watchdog.ts", "index.ts"]) {
-    const body = readFileSync9(join10(src, file), "utf8");
+    const body = readFileSync8(join9(src, file), "utf8");
     assert.match(body, /findOrphanPlayers\(playerMarker\(/);
-    assert.ok(!body.includes("sweepHosts"));
+    assert.ok(!/\bhosts\(\)/.test(body), `${file}: cleanup must not match stream hosts`);
   }
 });
 test("player detect returns a known value", () => {
@@ -2069,13 +2074,14 @@ test("tools registry: every slash command maps to a real tool", () => {
 });
 test("command files invoke registered CLI tools", () => {
   const here3 = dirname4(fileURLToPath3(import.meta.url));
-  const commandDir = join10(here3, "..", "commands");
+  const commandDir = join9(here3, "..", "commands");
   const toolNames = new Set(tools.map((t) => t.name));
   for (const file of readdirSync2(commandDir).filter((f) => f.endsWith(".md"))) {
-    const body = readFileSync9(join10(commandDir, file), "utf8").replace(/\r\n/g, "\n");
-    const m = body.match(/!`node "\$\{CLAUDE_PLUGIN_ROOT\}\/dist\/cli\.js" ([a-z_]+)/);
+    const body = readFileSync8(join9(commandDir, file), "utf8").replace(/\r\n/g, "\n");
+    const m = body.match(/!`node "\$\{CLAUDE_PLUGIN_ROOT\}\/dist\/cli\.js" ([a-z_]+)/) ?? body.match(/```!\nnode "\$\{CLAUDE_PLUGIN_ROOT\}\/dist\/cli\.js" ([a-z_]+) --stdin=[a-z]+ <<'PIRATE_RADIO_ARGS'\n\$ARGUMENTS\nPIRATE_RADIO_ARGS\n```/);
     assert.ok(m, `${file}: missing CLI invocation`);
     assert.ok(toolNames.has(m[1]), `${file}: invokes missing tool ${m[1]}`);
+    assert.ok(!/!`[^`]*\$ARGUMENTS/.test(body), `${file}: $ARGUMENTS inlined into shell`);
   }
 });
 test("podcast: parseFeed handles CDATA, entities, quoting, and missing enclosures", () => {
@@ -2097,6 +2103,14 @@ test("podcast: parseFeed handles CDATA, entities, quoting, and missing enclosure
 });
 test("podcast: parseFeed on a feed with no episodes returns []", () => {
   assert.deepStrictEqual(parseFeed("<rss><channel><title>empty</title></channel></rss>").episodes, []);
+});
+test("podcast: parseFeed ignores an item cut off by feed truncation", () => {
+  const head = `<rss><channel><title>Big</title>
+    <item><title>New</title><enclosure url="https://cdn.example.com/2.mp3"/></item>
+    <item><title>Old</title><enclosure url="https://cdn.exa`;
+  const parsed = parseFeed(head);
+  assert.strictEqual(parsed.channel, "Big");
+  assert.deepStrictEqual(parsed.episodes, [{ title: "New", url: "https://cdn.example.com/2.mp3" }]);
 });
 test("applemusic: escapeAS escapes quotes and backslashes", () => {
   assert.strictEqual(escapeAS(`My "Best" Mix\\2024`), `My \\"Best\\" Mix\\\\2024`);
@@ -2143,4 +2157,12 @@ test("state/tool edge cases: blank volume is rejected; no source describes as st
     now.state = prev4.state;
     now.source = prev4.source;
   }
+});
+test("version is identical in package.json, plugin.json and the MCP server", () => {
+  const root2 = join9(dirname4(fileURLToPath3(import.meta.url)), "..");
+  const pkg = JSON.parse(readFileSync8(join9(root2, "package.json"), "utf8")).version;
+  const plugin = JSON.parse(readFileSync8(join9(root2, ".claude-plugin", "plugin.json"), "utf8")).version;
+  const server = readFileSync8(join9(root2, "src", "index.ts"), "utf8").match(/name: "radiohead", version: "([^"]+)"/)?.[1];
+  assert.strictEqual(plugin, pkg);
+  assert.strictEqual(server, pkg);
 });

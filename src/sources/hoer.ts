@@ -10,7 +10,6 @@ import { now, playbackEffect } from "../state.js";
 import * as player from "../player.js";
 import * as spotify from "./spotify.js";
 import * as applemusic from "./applemusic.js";
-import { rememberHost } from "../dynhosts.js";
 
 const HOME = "https://hoer.live/";
 // Same UA the site is served to browsers with; the default node UA gets the
@@ -88,8 +87,6 @@ async function resolveAudioUrl(id: string): Promise<string> {
 export async function play(): Promise<string> {
   const { id, title } = await currentVideo();
   const url = await resolveAudioUrl(id);
-  // Resolved googlevideo hosts differ per session — register for orphan sweep.
-  try { rememberHost(new URL(url).host); } catch { /* sweep just won't cover it */ }
   await playbackEffect(async () => {
     // Silence remote sources before starting the local stream (same pattern as
     // radio/podcast); player.play() kills any previous local player itself.

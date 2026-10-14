@@ -26,8 +26,16 @@ function pidAlive(pid) {
     return e.code === "EPERM";
   }
 }
+var selfToken;
 function procStartToken(pid) {
   if (lifecycleTestMode) return null;
+  if (pid === process.pid) {
+    if (selfToken === void 0) selfToken = readStartToken(pid);
+    return selfToken;
+  }
+  return readStartToken(pid);
+}
+function readStartToken(pid) {
   if (!pidAlive(pid)) return null;
   try {
     if (process.platform === "linux") {
@@ -323,7 +331,8 @@ function hostProcess() {
 function dataDir() {
   if (directory) return directory;
   const explicit = process.env.PIRATE_RADIO_SESSION?.trim();
-  const host = explicit ? null : hostProcess();
+  const inheritedDefault = !explicit && process.env.PIRATE_RADIO_DEFAULT_SCOPE === "1";
+  const host = explicit || inheritedDefault ? null : hostProcess();
   const key = explicit || (host ? `pi:${host.pid}:${host.token ?? ""}` : "");
   scopeKey = key;
   directory = key ? join2(root, "sessions", createHash("sha256").update(key).digest("hex").slice(0, 24)) : root;

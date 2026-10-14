@@ -12,8 +12,9 @@
 //   opencode  ~/.config/opencode/opencode.json mcp.radiohead + ~/.config/opencode/commands/*.md
 //   hermes    ~/.hermes/config.yaml mcp_servers.radiohead    (tools only — no custom slash commands)
 //   pi        ~/.pi/agent/prompts/*.md + ~/.pi/agent/skills/radiohead/SKILL.md
-//             (pi has no MCP: commands shell out to dist/cli.js. No session anchor
-//              means no auto-stop on session end — /stop is the off switch.)
+//             (pi has no MCP: commands shell out to dist/cli.js. The watchdog
+//              binds to the pi process instead of an MCP anchor, so music still
+//              stops when pi exits.)
 //
 // Session auto-stop works unchanged on MCP hosts: the stdio server is a child of
 // the agent process, so when the agent exits the anchor dies and the watchdog
@@ -42,7 +43,10 @@ const home = homedir();
 
 // --- source of truth: parse commands/*.md ----------------------------------
 // Each file is Claude-flavored: frontmatter (description) + optional prose +
-// one !`node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" <tool> [args]` line.
+// one !`node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" <tool> [args]` line, or — for
+// commands that take user text — a ```! block feeding $ARGUMENTS through a
+// quoted heredoc (`--stdin=<key>`). Either way `args` is normalized to the
+// prompt-host form `key=$ARGUMENTS`.
 function parseCommand(file) {
   // Normalize CRLF → LF. On Windows, git checks these files out with CRLF
   // endings, which would break the \n-anchored frontmatter/invocation regexes
@@ -54,9 +58,12 @@ function parseCommand(file) {
   const description = (m[1].match(/^description:\s*(.+)$/m) ?? [])[1]?.trim() ?? "";
   const body = m[2].trim();
   const inv = body.match(/!`node "\$\{CLAUDE_PLUGIN_ROOT\}\/dist\/cli\.js" ([a-z_]+)((?: \S+)*)`/);
-  if (!inv) return null;
-  const prose = body.replace(inv[0], "").trim();
-  return { name: file.replace(/\.md$/, ""), description, tool: inv[1], args: inv[2].trim(), prose };
+  const fenced = body.match(/```!\nnode "\$\{CLAUDE_PLUGIN_ROOT\}\/dist\/cli\.js" ([a-z_]+) --stdin=([a-z]+) <<'PIRATE_RADIO_ARGS'\n\$ARGUMENTS\nPIRATE_RADIO_ARGS\n```/);
+  const found = inv ?? fenced;
+  if (!found) return null;
+  const prose = body.replace(found[0], "").trim();
+  const args = inv ? inv[2].trim() : `${fenced[2]}=$ARGUMENTS`;
+  return { name: file.replace(/\.md$/, ""), description, tool: found[1], args, prose };
 }
 const commands = readdirSync(join(root, "commands"))
   .filter((f) => f.endsWith(".md"))
@@ -163,9 +170,14 @@ function installOpencode(un) {
     managed.remember(key, JSON.stringify(entry));
   }
   // opencode supports the same !`cmd` shell injection as Claude Code, so the
-  // command bodies stay deterministic instead of prompting the model.
+  // command bodies stay deterministic instead of prompting the model. It also
+  // inlines $ARGUMENTS unescaped, so commands taking user text call the MCP
+  // tool instead — a name with an apostrophe or `&` must never reach a shell.
   for (const c of commands) {
-    const body = `---\ndescription: ${c.description}\n---\n${c.prose ? c.prose + "\n\n" : ""}!\`${cliCall(c)}\`\n`;
+    const run = c.args.includes("$ARGUMENTS")
+      ? `${c.description}. Call the \`${c.tool}\` tool from the radiohead MCP server with \`${c.args.replace("$ARGUMENTS", "<value>")}\`, where <value> is: $ARGUMENTS\n\nThen tell the user the result in one short line.`
+      : `!\`${cliCall(c)}\``;
+    const body = `---\ndescription: ${c.description}\n---\n${c.prose ? c.prose + "\n\n" : ""}${run}\n`;
     writeGenerated(join(opencodeDir, "commands", `${c.name}.md`), body);
   }
 }
@@ -218,7 +230,7 @@ function installPi(un) {
   for (const c of commands) {
     const how = `Run this with the bash tool:\n\n\`\`\`\n${cliCall(c)}\n\`\`\`` +
       (c.args.includes("$ARGUMENTS")
-        ? "\n\nReplace $ARGUMENTS with the value from my message (ask me if it's missing)."
+        ? "\n\nReplace $ARGUMENTS with the value from my message as ONE single-quoted shell word (ask me if it's missing)."
         : "");
     writeGenerated(join(piDir, "prompts", `${c.name}.md`), promptText(c, how));
   }
@@ -244,7 +256,7 @@ ${toolLines}
 
 Notes:
 ${radioGenres ? `- Genres for \`radio_play\`: ${radioGenres}.` : "- Genres for `radio_play`: run `radio_list` to see available genres."}
-- pi has no session anchor, so music does NOT stop when the session ends — run \`radio_stop\` when the user is done.
+- Music stops automatically when this pi session exits; run \`radio_stop\` to stop it sooner.
 - Spotify tools need SPOTIFY_CLIENT_ID exported and a Premium account.
 `);
 }

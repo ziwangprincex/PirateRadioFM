@@ -32,6 +32,16 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // `--stdin=<key>` reads that argument's value from stdin. Slash commands pass
+  // user text through a quoted heredoc: Claude Code substitutes $ARGUMENTS as
+  // typed, so inlining it on the command line would let an apostrophe or `&`
+  // in a podcast/playlist name break (or run as) shell syntax.
+  const stdinFlag = rest.find((a) => a.startsWith("--stdin="));
+  if (stdinFlag) {
+    const value = await readStdin();
+    rest.splice(rest.indexOf(stdinFlag), 1, `${stdinFlag.slice("--stdin=".length)}=${value.trim()}`);
+  }
+
   let args: Record<string, unknown>;
   try {
     args = parseArgs(rest, tool.schema);
@@ -49,6 +59,12 @@ async function main(): Promise<void> {
     console.error(`Error: ${(e as Error).message}`);
     process.exit(1);
   }
+}
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 main();

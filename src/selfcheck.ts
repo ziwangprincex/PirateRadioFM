@@ -12,7 +12,6 @@ import { fileURLToPath } from "node:url";
 import * as radio from "./sources/radio.js";
 import * as player from "./player.js";
 import { acceptedGenres, catalogVersion, hosts, resolveGenre } from "./stations.js";
-import { sweepHosts } from "./dynhosts.js";
 import { parseArgs } from "./argparse.js";
 import { tools } from "./tools.js";
 import { parseFeed, embeddedDirectUrl } from "./sources/podcast.js";
@@ -34,8 +33,8 @@ test("station catalog: exact genres, aliases, and schema version", () => {
 });
 
 test("hosts() is non-empty and unique", () => {
-  // A duplicate only wastes orphan-sweep work, but an EMPTY list would make the
-  // sweep a no-op and silently break the "no music survives a stop" guarantee.
+  // Used by /doctor's summary and the station health check. Process cleanup
+  // never matches hosts (see the next test), so this only guards catalog data.
   const h = hosts();
   assert.ok(h.length > 0, "hosts() returned empty — stations.json broken?");
   assert.strictEqual(new Set(h).size, h.length, "hosts() has duplicates");
@@ -46,7 +45,7 @@ test("all orphan sweep sites require a session-specific marker, never a host", (
   for (const file of ["player.ts", "watchdog.ts", "index.ts"]) {
     const body = readFileSync(join(src, file), "utf8");
     assert.match(body, /findOrphanPlayers\(playerMarker\(/);
-    assert.ok(!body.includes("sweepHosts"));
+    assert.ok(!/\bhosts\(\)/.test(body), `${file}: cleanup must not match stream hosts`);
   }
 });
 
@@ -75,9 +74,13 @@ test("command files invoke registered CLI tools", () => {
   const toolNames = new Set(tools.map((t) => t.name));
   for (const file of readdirSync(commandDir).filter((f) => f.endsWith(".md"))) {
     const body = readFileSync(join(commandDir, file), "utf8").replace(/\r\n/g, "\n");
-    const m = body.match(/!`node "\$\{CLAUDE_PLUGIN_ROOT\}\/dist\/cli\.js" ([a-z_]+)/);
+    const m = body.match(/!`node "\$\{CLAUDE_PLUGIN_ROOT\}\/dist\/cli\.js" ([a-z_]+)/) ??
+      body.match(/```!\nnode "\$\{CLAUDE_PLUGIN_ROOT\}\/dist\/cli\.js" ([a-z_]+) --stdin=[a-z]+ <<'PIRATE_RADIO_ARGS'\n\$ARGUMENTS\nPIRATE_RADIO_ARGS\n```/);
     assert.ok(m, `${file}: missing CLI invocation`);
     assert.ok(toolNames.has(m[1]), `${file}: invokes missing tool ${m[1]}`);
+    // Claude Code substitutes $ARGUMENTS as typed (no shell escaping): user
+    // text may only reach the shell through the quoted heredoc above.
+    assert.ok(!/!`[^`]*\$ARGUMENTS/.test(body), `${file}: $ARGUMENTS inlined into shell`);
   }
 });
 
@@ -103,6 +106,15 @@ test("podcast: parseFeed handles CDATA, entities, quoting, and missing enclosure
 
 test("podcast: parseFeed on a feed with no episodes returns []", () => {
   assert.deepStrictEqual(parseFeed("<rss><channel><title>empty</title></channel></rss>").episodes, []);
+});
+
+test("podcast: parseFeed ignores an item cut off by feed truncation", () => {
+  const head = `<rss><channel><title>Big</title>
+    <item><title>New</title><enclosure url="https://cdn.example.com/2.mp3"/></item>
+    <item><title>Old</title><enclosure url="https://cdn.exa`;
+  const parsed = parseFeed(head);
+  assert.strictEqual(parsed.channel, "Big");
+  assert.deepStrictEqual(parsed.episodes, [{ title: "New", url: "https://cdn.example.com/2.mp3" }]);
 });
 
 test("applemusic: escapeAS escapes quotes and backslashes", () => {
@@ -162,4 +174,14 @@ test("state/tool edge cases: blank volume is rejected; no source describes as st
     now.state = prev.state;
     now.source = prev.source;
   }
+});
+
+test("version is identical in package.json, plugin.json and the MCP server", () => {
+  // Releases bump all three by hand; this turns a forgotten one into a failure.
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
+  const plugin = JSON.parse(readFileSync(join(root, ".claude-plugin", "plugin.json"), "utf8")).version;
+  const server = readFileSync(join(root, "src", "index.ts"), "utf8").match(/name: "radiohead", version: "([^"]+)"/)?.[1];
+  assert.strictEqual(plugin, pkg);
+  assert.strictEqual(server, pkg);
 });

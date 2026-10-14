@@ -3,4 +3,8 @@ description: Play from your Apple Music library via Music.app — playlist, song
 argument-hint: "<playlist-song-or-album>"
 allowed-tools: Bash(node:*)
 ---
-!`node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" music_play target=$ARGUMENTS`
+```!
+node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" music_play --stdin=target <<'PIRATE_RADIO_ARGS'
+$ARGUMENTS
+PIRATE_RADIO_ARGS
+```

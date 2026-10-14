@@ -56,6 +56,7 @@ test("HTTP: bounded GET retry, no automatic replay of writes, Retry-After budget
     await assert.rejects(request(`${url}/rate`, {}, { budgetMs: 500 }), /budget/);
     assert.equal(hits["/rate"], 1);
     await assert.rejects(request(`${url}/large`, {}, { maxBytes: 100, retries: 0 }), /size limit/);
+    assert.equal(await (await request(`${url}/large`, {}, { maxBytes: 100, truncate: true, retries: 0 })).text(), "x".repeat(100));
   });
 });
 test("HTTP: caller cancellation and total operation budget abort pending reads", async () => {
@@ -212,18 +213,28 @@ test("real mpv: pause/resume/volume retain PID and media position (null audio ou
   }
 });
 
-test("ffplay: unsupported controls preserve the player and persisted state", async () => {
+test("ffplay: pause is refused, volume is kept for the next play, player survives", async () => {
   const { runTool } = await import("./tools.js");
   await withState(() => { now.source = "podcast"; now.state = "playing"; now.volume = 42; });
   addPlayer(process.pid, "local-test", { player: "ffplay" });
   try {
     await assert.rejects(runTool("radio_pause"), /requires mpv/);
-    await assert.rejects(runTool("radio_volume", { level: 33 }), /requires mpv/);
+    assert.match(await runTool("radio_volume", { level: 33 }), /vol 33 \(applies from the next/);
     loadState();
     assert.equal(now.state, "playing");
-    assert.equal(now.volume, 42);
+    assert.equal(now.volume, 33);
     assert.equal(livePlayers().length, 1);
   } finally { drainAll(); }
+});
+
+test("stop: a failed remote pause is reported but still records the stop", async () => {
+  const { runTool } = await import("./tools.js");
+  // Isolated HOME has no Spotify tokens, so the remote pause must fail.
+  await withState(() => { now.source = "spotify"; now.state = "playing"; });
+  assert.match(await runTool("radio_stop"), /^\[\] Stopped\. \(Spotify did not confirm: Not logged in/);
+  loadState();
+  assert.equal(now.state, "stopped");
+  assert.equal(now.source, null);
 });
 
 test("state: failed effects release locks and session retirement rejects stale requests", async () => {

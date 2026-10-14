@@ -14,8 +14,7 @@ type Player = "mpv" | "ffplay";
 
 // Cache the detection result — this used to run on every play(), spawning
 // `where` / `command -v` synchronously each time. The detected binary doesn't
-// change during a session; if the user installs mpv mid-session they can call
-// resetDetectCache() (currently unused).
+// change during a session; installing mpv takes effect on the next process.
 let detected: Player | null | undefined; // undefined = not-yet-detected
 function detect(): Player | null {
   if (detected !== undefined) return detected;
@@ -117,13 +116,16 @@ export async function setPaused(paused: boolean): Promise<boolean> {
   }
   return true;
 }
-export async function setVolume(volume: number): Promise<void> {
+// false = a live player has no IPC channel (ffplay): the caller keeps the level
+// for the next play instead. mpv IPC failures still throw.
+export async function setVolume(volume: number): Promise<boolean> {
   const players = livePlayers();
-  if (players.some((p) => !p.ipc)) throw new Error("Live volume control requires mpv; ffplay is not restarted automatically.");
+  if (players.some((p) => !p.ipc)) return false;
   for (const p of players) {
     if (!sameProcess(p.pid, p.token)) throw new Error("Player exited");
     await mpvCommand(p.ipc!, ["set_property", "volume", volume]);
   }
+  return true;
 }
 function spawnWatchdog(playerPid: number): void {
   const anchor = readAnchor();

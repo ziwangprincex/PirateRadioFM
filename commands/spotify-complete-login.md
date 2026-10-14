@@ -3,4 +3,8 @@ description: Finish Spotify login by pasting the authorization code from the red
 argument-hint: "<code>"
 allowed-tools: Bash(node:*)
 ---
-!`node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" spotify_complete_login code=$ARGUMENTS`
+```!
+node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" spotify_complete_login --stdin=code <<'PIRATE_RADIO_ARGS'
+$ARGUMENTS
+PIRATE_RADIO_ARGS
+```

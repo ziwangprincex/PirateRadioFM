@@ -35,8 +35,21 @@ export function pidAlive(pid: number): boolean {
 // (practically) unique per process launch, so if the OS recycles the PID the
 // token changes. Best-effort: returns null when it can't be determined, and
 // callers must degrade gracefully (fall back to bare pidAlive) in that case.
+//
+// Our own token is constant for this process's lifetime, so it is computed
+// once: every lock acquisition stamps it into the owner file, and on Windows
+// each lookup is a PowerShell launch (a single /play takes several locks).
+let selfToken: string | null | undefined;
 export function procStartToken(pid: number): string | null {
   if (lifecycleTestMode) return null;
+  if (pid === process.pid) {
+    if (selfToken === undefined) selfToken = readStartToken(pid);
+    return selfToken;
+  }
+  return readStartToken(pid);
+}
+
+function readStartToken(pid: number): string | null {
   if (!pidAlive(pid)) return null;
   try {
     if (process.platform === "linux") {

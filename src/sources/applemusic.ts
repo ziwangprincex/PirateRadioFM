@@ -36,12 +36,6 @@ export async function play(target: string): Promise<string> {
   const t = escapeAS(target.trim());
   if (!t) throw new Error("Give me a playlist, song, or album name from your Music library.");
   return playbackEffect(async () => {
-    // Silence the other sources first (best effort): local mpv/ffplay always;
-    // Spotify only if it was the active source, since pause() needs login+device.
-    stopLocal();
-    if (now.source === "spotify") {
-      try { await spotify.pause(); } catch { /* best effort */ }
-    }
     const attempts: Array<{ script: string; kind: string }> = [
       { script: `tell application "Music" to play playlist "${t}"`, kind: "playlist" },
       { script: `tell application "Music" to play (first track of library playlist 1 whose name contains "${t}")`, kind: "track" },
@@ -62,6 +56,14 @@ export async function play(target: string): Promise<string> {
         `Nothing in your Music library matches "${target}". AppleScript can only play ` +
           `what's already in the library — add it in Music.app first.`,
       );
+    // Silence the other sources only once Music.app has committed (same order as
+    // spotify.playContext): a typo must not end in silence plus an error. Local
+    // mpv/ffplay always; Spotify only if it was the active source, since pause()
+    // needs login+device.
+    stopLocal();
+    if (now.source === "spotify") {
+      try { await spotify.pause(); } catch { /* best effort */ }
+    }
     // current track may not be queryable in the instant after `play` — fall back
     // to what the user asked for rather than failing the whole call.
     let title = target;
