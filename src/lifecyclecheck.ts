@@ -11,8 +11,11 @@ import { fileURLToPath } from "node:url";
 
 const self = fileURLToPath(import.meta.url);
 
+// PIRATE_RADIO_DEFAULT_SCOPE pins the default scope like a watchdog inherits
+// it: no pi-ancestor scan (a full PowerShell process listing per child on
+// Windows, slow enough on CI to push concurrent children past their timeouts).
 function isolatedEnv(home: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return { ...process.env, PIRATE_RADIO_SESSION: "", HOME: home, USERPROFILE: home, ...extra };
+  return { ...process.env, PIRATE_RADIO_SESSION: "", PIRATE_RADIO_DEFAULT_SCOPE: "1", HOME: home, USERPROFILE: home, ...extra };
 }
 
 function stateDir(home: string): string { return join(home, ".pirate-radio"); }
