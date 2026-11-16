@@ -78,8 +78,10 @@ function sameProcess(pid, token) {
 function killSameProcess(pid, token) {
   if (sameProcess(pid, token)) killPid(pid);
 }
-function killPid(pid) {
-  if (!pid || !Number.isInteger(pid) || pid <= 0) return;
+var KILL_GRACE_MS = 250;
+var KILL_POLL_MS = 5;
+function terminate(pid) {
+  if (!pid || !Number.isInteger(pid) || pid <= 0) return false;
   try {
     if (isWin) {
       execFileSync("taskkill", ["/F", "/PID", String(pid), "/T"], {
@@ -87,28 +89,36 @@ function killPid(pid) {
         timeout: 8e3,
         windowsHide: true
       });
-    } else {
-      process.kill(pid, "SIGTERM");
-      const deadline = Date.now() + 250;
-      while (Date.now() < deadline && pidAlive(pid)) {
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
-      }
-      if (pidAlive(pid)) {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {
-        }
-      }
+      return false;
     }
+    process.kill(pid, "SIGTERM");
+    return true;
   } catch {
+    return false;
   }
+}
+function forceKill(pid) {
+  if (pidAlive(pid)) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+    }
+  }
+}
+function killPid(pid) {
+  if (!terminate(pid)) return;
+  const deadline = Date.now() + KILL_GRACE_MS;
+  while (Date.now() < deadline && pidAlive(pid)) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, KILL_POLL_MS);
+  }
+  forceKill(pid);
 }
 function findOrphanPlayers(marker) {
   if (!/^pirate-radio-[a-f0-9]{24}$/.test(marker)) return [];
   const matches = (cmd) => cmd.split(/[\s\"]+/).some((arg) => arg === `--title=${marker}` || arg === marker);
   try {
     if (isWin) {
-      const out2 = execFileSync(
+      const out = execFileSync(
         "powershell",
         [
           "-NoProfile",
@@ -117,15 +127,27 @@ function findOrphanPlayers(marker) {
         ],
         { encoding: "utf8", timeout: 8e3, windowsHide: true }
       );
-      return parsePidLines(out2, "	", matches);
+      return parsePidLines(out, "	", matches);
     }
-    const out = execFileSync("ps", ["-eo", isMac ? "pid=,ucomm=,args=" : "pid=,comm=,args="], {
-      encoding: "utf8",
-      timeout: 8e3
-    });
-    return parseUnixPs(out, matches);
+    const comm = isMac ? "ucomm=" : "comm=";
+    const players = [];
+    for (const line of ps(["-eo", `pid=,${comm}`]).split("\n")) {
+      const row = line.trim().match(/^(\d+)\s+(?:mpv|ffplay)$/);
+      if (row) players.push(Number(row[1]));
+    }
+    if (players.length === 0) return [];
+    return parseUnixPs(ps(["-o", `pid=,${comm},args=`, "-p", players.join(",")]), matches);
   } catch {
     return [];
+  }
+}
+function ps(args) {
+  try {
+    return execFileSync("ps", args, { encoding: "utf8", timeout: 8e3 });
+  } catch (e) {
+    const stdout = e.stdout;
+    if (typeof stdout === "string" && e.status === 1) return stdout;
+    throw e;
   }
 }
 function parsePidLines(out, sep, matches) {
@@ -156,63 +178,66 @@ function isPiProcess(name, args) {
   const base = argv1.slice(argv1.lastIndexOf("/") + 1);
   return base === "pi" || base === "pi.js";
 }
-function enumerateProcesses() {
-  const map = /* @__PURE__ */ new Map();
-  if (isWin) {
-    const out2 = execFileSync(
-      "powershell",
-      [
-        "-NoProfile",
-        "-Command",
-        "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress"
-      ],
-      { encoding: "utf8", timeout: 8e3, windowsHide: true }
-    );
-    const rows = JSON.parse(out2.trim() || "[]");
-    for (const r of Array.isArray(rows) ? rows : [rows]) {
-      if (!r.ProcessId) continue;
-      map.set(r.ProcessId, {
-        pid: r.ProcessId,
-        ppid: r.ParentProcessId ?? 0,
-        name: r.Name ?? "",
-        args: r.CommandLine ?? ""
-      });
-    }
-    return map;
+function ancestors() {
+  if (isWin) return walk(enumerateWindowsProcesses());
+  const parents = /* @__PURE__ */ new Map();
+  for (const line of ps(["-eo", "pid=,ppid="]).split("\n")) {
+    const m = line.trim().match(/^(\d+)\s+(\d+)$/);
+    if (m) parents.set(Number(m[1]), { pid: Number(m[1]), ppid: Number(m[2]), name: "", args: "" });
   }
-  const out = execFileSync("ps", ["-eo", "pid=,ppid=,args="], {
-    encoding: "utf8",
-    timeout: 8e3
-  });
-  for (const line of out.split("\n")) {
-    const t = line.trim();
-    if (!t) continue;
-    const m = t.match(/^(\d+)\s+(\d+)\s+([\s\S]*)$/);
+  const chain = walk(parents);
+  if (chain.length === 0) return [];
+  const procs = /* @__PURE__ */ new Map();
+  for (const line of ps(["-o", "pid=,ppid=,args=", "-p", chain.map((p) => p.pid).join(",")]).split("\n")) {
+    const m = line.trim().match(/^(\d+)\s+(\d+)\s+([\s\S]*)$/);
     if (!m) continue;
     const pid = Number(m[1]);
-    if (!Number.isInteger(pid) || pid <= 0) continue;
     const args = m[3];
     const argv0 = args.split(" ")[0] ?? "";
-    map.set(pid, {
-      pid,
-      ppid: Number(m[2]) || 0,
-      name: argv0.slice(argv0.lastIndexOf("/") + 1),
-      args
+    procs.set(pid, { pid, ppid: Number(m[2]) || 0, name: argv0.slice(argv0.lastIndexOf("/") + 1), args });
+  }
+  return walk(procs);
+}
+function walk(procs) {
+  const chain = [];
+  const seen = /* @__PURE__ */ new Set();
+  let pid = process.ppid;
+  for (let depth = 0; depth < 32 && pid > 1 && !seen.has(pid); depth++) {
+    seen.add(pid);
+    const p = procs.get(pid);
+    if (!p) break;
+    chain.push(p);
+    pid = p.ppid;
+  }
+  return chain;
+}
+function enumerateWindowsProcesses() {
+  const map = /* @__PURE__ */ new Map();
+  const out = execFileSync(
+    "powershell",
+    [
+      "-NoProfile",
+      "-Command",
+      "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress"
+    ],
+    { encoding: "utf8", timeout: 8e3, windowsHide: true }
+  );
+  const rows = JSON.parse(out.trim() || "[]");
+  for (const r of Array.isArray(rows) ? rows : [rows]) {
+    if (!r.ProcessId) continue;
+    map.set(r.ProcessId, {
+      pid: r.ProcessId,
+      ppid: r.ParentProcessId ?? 0,
+      name: r.Name ?? "",
+      args: r.CommandLine ?? ""
     });
   }
   return map;
 }
 function findPiProcess() {
   try {
-    const procs = enumerateProcesses();
-    const seen = /* @__PURE__ */ new Set();
-    let pid = process.ppid;
-    for (let depth = 0; depth < 32 && pid > 1 && !seen.has(pid); depth++) {
-      seen.add(pid);
-      const p = procs.get(pid);
-      if (!p) break;
-      if (isPiProcess(p.name, p.args)) return { pid, token: procStartToken(pid) };
-      pid = p.ppid;
+    for (const p of ancestors()) {
+      if (isPiProcess(p.name, p.args)) return { pid: p.pid, token: procStartToken(p.pid) };
     }
   } catch {
   }
@@ -399,8 +424,9 @@ function writeRaw(r) {
 function withLock(fn) {
   return withCrossProcessLock(lockPath, () => {
     const reg = readRaw();
+    const before = JSON.stringify(reg);
     const result = fn(reg);
-    writeRaw(reg);
+    if (JSON.stringify(reg) !== before) writeRaw(reg);
     return result;
   });
 }

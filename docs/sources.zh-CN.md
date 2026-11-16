@@ -48,8 +48,9 @@ Web API 只能**遥控**一个正在运行的 Spotify 客户端（Spotify Connec
 1. 到 <https://developer.spotify.com/dashboard> 建一个 app，Redirect URI 填
    `http://127.0.0.1:8888/callback`。
 2. 把 Client ID 放进环境变量：`export SPOTIFY_CLIENT_ID=...`。
-3. `/spotify-login` → 打开返回的 URL 授权 → 从跳转地址里复制 `code` 参数 →
-   `/spotify-complete-login <code>`。
+3. `/spotify-login` → 打开返回的 URL 授权 → 复制浏览器地址栏里的跳转地址
+   （页面本身打不开，没关系）→ `/spotify-complete-login <地址>`。只粘贴其中的
+   `code` 参数也可以。
 
 Token 存在 `~/.pirate-radio/spotify.json`（权限 0600），之后自动刷新，
 不用重复登录。

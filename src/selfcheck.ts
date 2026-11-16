@@ -14,7 +14,8 @@ import * as player from "./player.js";
 import { acceptedGenres, catalogVersion, hosts, resolveGenre } from "./stations.js";
 import { parseArgs } from "./argparse.js";
 import { tools } from "./tools.js";
-import { parseFeed, embeddedDirectUrl } from "./sources/podcast.js";
+import { parseFeed, embeddedDirectUrl, locateEpisode } from "./sources/podcast.js";
+import { authorizationCode, spotifyErrorMessage } from "./sources/spotify.js";
 import { escapeAS } from "./sources/applemusic.js";
 import { describe, now } from "./state.js";
 
@@ -115,6 +116,41 @@ test("podcast: parseFeed ignores an item cut off by feed truncation", () => {
   const parsed = parseFeed(head);
   assert.strictEqual(parsed.channel, "Big");
   assert.deepStrictEqual(parsed.episodes, [{ title: "New", url: "https://cdn.example.com/2.mp3" }]);
+});
+
+test("podcast: parseFeed decodes numeric entities exactly once", () => {
+  const parsed = parseFeed(`<rss><channel><title>Caf&#233; &#x26; Co</title>
+    <item><title>What&#8217;s new &amp;lt;live&amp;gt;</title>
+      <enclosure url="https://cdn.example.com/a.mp3?x=1&amp;y=2"/></item></channel></rss>`);
+  assert.strictEqual(parsed.channel, "Café & Co");
+  assert.strictEqual(parsed.episodes[0].title, "What’s new &lt;live&gt;");
+  assert.strictEqual(parsed.episodes[0].url, "https://cdn.example.com/a.mp3?x=1&y=2");
+});
+
+test("podcast: stepping follows the current episode when the feed gains new ones", () => {
+  const eps = (...titles: string[]) => titles.map((title) => ({ title, url: `https://cdn.example.com/${title}.mp3` }));
+  // Was playing "B" at index 1; a new episode "N" was published since.
+  assert.strictEqual(locateEpisode(eps("N", "A", "B", "C"), "B", 1), 2);
+  // Duplicate titles resolve to the occurrence nearest the saved index.
+  assert.strictEqual(locateEpisode(eps("X", "B", "Y", "B"), "B", 3), 3);
+  // Unknown title (renamed/removed) falls back to the saved index.
+  assert.strictEqual(locateEpisode(eps("A", "B"), "gone", 1), 1);
+  assert.strictEqual(locateEpisode(eps("A", "B"), null, 0), 0);
+});
+
+test("spotify: authorization code is accepted bare or inside the pasted redirect URL", () => {
+  assert.strictEqual(authorizationCode("AQBx-y_z"), "AQBx-y_z");
+  assert.strictEqual(authorizationCode("http://127.0.0.1:8888/callback?code=AQBx-y_z&state=1"), "AQBx-y_z");
+  assert.strictEqual(authorizationCode("code=AQBx-y_z"), "AQBx-y_z");
+  assert.throws(() => authorizationCode("http://127.0.0.1:8888/callback?error=access_denied"), /access_denied/);
+});
+
+test("spotify: 403 reports Spotify's reason instead of always blaming Premium", () => {
+  assert.match(spotifyErrorMessage(403, JSON.stringify({ error: { status: 403, message: "Player command failed: Premium required", reason: "PREMIUM_REQUIRED" } })), /Premium is required/);
+  const restricted = spotifyErrorMessage(403, JSON.stringify({ error: { status: 403, message: "Player command failed: Restriction violated", reason: "UNKNOWN" } }));
+  assert.match(restricted, /Restriction violated/);
+  assert.doesNotMatch(restricted, /Premium/);
+  assert.match(spotifyErrorMessage(500, "<html>oops</html>"), /Spotify API 500: <html>oops/);
 });
 
 test("applemusic: escapeAS escapes quotes and backslashes", () => {

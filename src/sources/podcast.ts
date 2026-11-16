@@ -14,13 +14,17 @@ export interface Episode { title: string; url: string; }
 
 const MAX_EPISODES = 50;
 
+const NAMED_ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
+
+// One pass, so "&amp;lt;" decodes to the literal text "&lt;", not "<". Numeric
+// references (&#8217; &#x2019;) are how most feeds encode curly quotes.
 function decodeEntities(s: string): string {
-  return s
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#0*39;|&apos;/g, "'");
+  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (match, entity: string) => {
+    if (entity[0] !== "#") return NAMED_ENTITIES[entity] ?? match;
+    const hex = entity[1] === "x" || entity[1] === "X";
+    const code = parseInt(entity.slice(hex ? 2 : 1), hex ? 16 : 10);
+    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : match;
+  });
 }
 
 function textOf(block: string, tag: string): string | null {
@@ -124,13 +128,11 @@ async function resolveFeed(target: string): Promise<{ feedUrl: string; name: str
   return { feedUrl: hit.feedUrl, name: hit.collectionName ?? null };
 }
 
-// Play episode `index` (0 = newest) of the feed in `now.podcastFeed`.
-async function playIndex(feedUrl: string, name: string | null, index: number, strict = false): Promise<string> {
+// Play the episode `choose` picks from the feed's newest-first list.
+async function playEpisode(feedUrl: string, name: string | null, choose: (episodes: Episode[]) => number): Promise<string> {
   const { channel, episodes } = parseFeed(await fetchText(feedUrl, true));
   if (episodes.length === 0) throw new Error("The feed has no playable episodes (no audio enclosures).");
-  // Stepping past the end must not silently replay the current episode.
-  if (strict && index >= episodes.length) throw new Error(`Already at the oldest episode (${episodes.length} available).`);
-  const i = Math.max(0, Math.min(index, episodes.length - 1));
+  const i = choose(episodes);
   const ep = episodes[i];
   const direct = await resolveDirect(ep.url);
   await playbackEffect(async () => {
@@ -155,7 +157,7 @@ async function playIndex(feedUrl: string, name: string | null, index: number, st
 
 export async function playQuery(target: string): Promise<string> {
   const { feedUrl, name } = await resolveFeed(target);
-  return playIndex(feedUrl, name, 0);
+  return playEpisode(feedUrl, name, () => 0);
 }
 
 function requireCurrent(): string {
@@ -164,17 +166,32 @@ function requireCurrent(): string {
   return now.podcastFeed;
 }
 
-// next = one episode OLDER (down the newest-first list), prev = one newer.
-export async function next(): Promise<string> {
-  return playIndex(requireCurrent(), now.podcastName, now.episodeIndex + 1, true);
+// The feed is refetched on every step, and publishing an episode shifts every
+// index by one. Re-find the episode we were on by title — nearest its saved
+// index if titles repeat — so next/prev step from it instead of replaying it.
+// Exported for selfcheck.
+export function locateEpisode(episodes: Episode[], title: string | null, index: number): number {
+  let found = -1;
+  episodes.forEach((ep, i) => {
+    if (title && ep.title === title && (found < 0 || Math.abs(i - index) < Math.abs(found - index))) found = i;
+  });
+  return found >= 0 ? found : index;
 }
 
-export async function prev(): Promise<string> {
-  if (now.episodeIndex <= 0) throw new Error("Already at the newest episode.");
-  return playIndex(requireCurrent(), now.podcastName, now.episodeIndex - 1);
+// offset +1 = one episode OLDER (down the newest-first list), -1 = one newer,
+// 0 = the current one again.
+async function step(offset: number): Promise<string> {
+  return playEpisode(requireCurrent(), now.podcastName, (episodes) => {
+    const i = locateEpisode(episodes, now.title, now.episodeIndex) + offset;
+    // Stepping past either end must not silently replay the current episode.
+    if (offset > 0 && i >= episodes.length) throw new Error(`Already at the oldest episode (${episodes.length} available).`);
+    if (offset < 0 && i < 0) throw new Error("Already at the newest episode.");
+    return Math.max(0, Math.min(i, episodes.length - 1));
+  });
 }
+
+export function next(): Promise<string> { return step(1); }
+export function prev(): Promise<string> { return step(-1); }
 
 // Explicit fallback when the old player has exited; live mpv resumes via IPC.
-export async function resume(): Promise<string> {
-  return playIndex(requireCurrent(), now.podcastName, now.episodeIndex);
-}
+export function resume(): Promise<string> { return step(0); }

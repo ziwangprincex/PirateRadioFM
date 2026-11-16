@@ -53,8 +53,9 @@ Connect device) — it produces no audio itself, and playback control requires
 1. Create an app at <https://developer.spotify.com/dashboard> with Redirect URI
    `http://127.0.0.1:8888/callback`.
 2. `export SPOTIFY_CLIENT_ID=...` (the app's Client ID).
-3. `/spotify-login` → open the URL, approve → copy the `code` query param from
-   the redirect → `/spotify-complete-login <code>`.
+3. `/spotify-login` → open the URL, approve → copy the redirect URL from the
+   address bar (the page itself won't load) → `/spotify-complete-login <url>`.
+   Pasting just its `code` parameter works too.
 
 Tokens live in `~/.pirate-radio/spotify.json` (mode 0600) and refresh
 automatically.

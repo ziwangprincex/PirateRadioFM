@@ -18,6 +18,14 @@ export async function wait(ms: number): Promise<void> {
   await delay(ms, undefined, { signal: operationSignal() });
 }
 
+// fetch reports every transport failure as TypeError("fetch failed"); the
+// actionable part (ENOTFOUND, ECONNREFUSED, a TLS error) is only in `cause`.
+function networkError(e: unknown): unknown {
+  const cause = (e as { cause?: { message?: string; code?: string } } | null)?.cause;
+  const detail = cause?.message || cause?.code;
+  return e instanceof TypeError && detail ? new Error(`Network error: ${detail}`, { cause: e }) : e;
+}
+
 // truncate: keep the first maxBytes of an oversized body instead of failing.
 // Podcast feeds need only their newest items, but popular ones exceed 20MB.
 interface HttpOptions { timeoutMs?: number; budgetMs?: number; retries?: number; maxBytes?: number; truncate?: boolean; probe?: boolean; }
@@ -76,7 +84,7 @@ export async function request(url: string, init: RequestInit = {}, options: Http
       }
     } catch (e) {
       parent?.throwIfAborted();
-      if (attempt >= retries) throw e;
+      if (attempt >= retries) throw networkError(e);
     } finally {
       clearTimeout(timer);
       parent?.removeEventListener("abort", abort);

@@ -133,7 +133,12 @@ async function childMain(): Promise<boolean> {
   }
   if (mode === "player-stop") {
     const player = await import("./player.js");
-    player.stop();
+    await player.stop();
+    return true;
+  }
+  if (mode === "find-pi") {
+    const { findPiProcess } = await import("./proc.js");
+    process.stdout.write(JSON.stringify(findPiProcess()));
     return true;
   }
   return false;
@@ -353,6 +358,26 @@ if (!(await childMain())) {
     } finally {
       await stopAndWait(orphan);
       await stopAndWait(manual);
+      removeHome(home);
+    }
+  });
+
+  test("pi host detection walks the ancestor chain to the agent process", { concurrency: false }, async () => {
+    const home = makeHome();
+    try {
+      // A script under a "pi-coding-agent" directory matches the node-install
+      // form on every platform (Windows paths defeat the argv[1] basename check).
+      const dir = join(home, "pi-coding-agent");
+      mkdirSync(dir, { recursive: true });
+      const agent = join(dir, "cli.mjs");
+      writeFileSync(agent, `import { spawnSync } from "node:child_process";
+const r = spawnSync(process.execPath, [${JSON.stringify(self)}, "find-pi"], { encoding: "utf8", windowsHide: true });
+process.stdout.write(JSON.stringify({ agent: process.pid, found: r.stdout, stderr: r.stderr }));\n`);
+      const result = spawnSync(process.execPath, [agent], { env: isolatedEnv(home), encoding: "utf8", timeout: 30_000, windowsHide: true });
+      assert.strictEqual(result.status, 0, result.stderr);
+      const out = JSON.parse(result.stdout);
+      assert.strictEqual(JSON.parse(out.found || "null")?.pid, out.agent, out.stderr);
+    } finally {
       removeHome(home);
     }
   });

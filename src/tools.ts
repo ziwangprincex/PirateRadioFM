@@ -77,11 +77,11 @@ export const tools: Tool[] = [
       if (now.state === "stopped" && !now.source) {
         // Defensive: kill any orphaned player even if state says stopped (can
         // happen after a state.json corruption/reset while mpv is alive).
-        player.stop();
+        await player.stop();
         return "Stopped.";
       }
       if (!now.source) {
-        player.stop();
+        await player.stop();
         now.state = "stopped";
         return "Stopped.";
       }
@@ -107,7 +107,7 @@ export const tools: Tool[] = [
       // The user's intent wins over remote success: local players always die and
       // the state always says stopped. A failed Spotify/Music.app call (offline,
       // expired token, no device) is reported, not allowed to roll the stop back.
-      player.stop();
+      await player.stop();
       let warning = "";
       try {
         if (now.source === "spotify") await spotify.pause();
@@ -166,14 +166,14 @@ export const tools: Tool[] = [
   },
   {
     name: "spotify_login",
-    description: "Start Spotify OAuth. Returns a URL to open; then paste the code with spotify_complete_login.",
+    description: "Start Spotify OAuth. Returns a URL to open; then paste the redirect URL with spotify_complete_login.",
     schema: noArgs,
     handler: () =>
-      `Open this URL, approve, then copy the "code" query param from the redirect and call spotify_complete_login:\n${spotify.loginUrl()}`,
+      `Open this URL and approve. Then copy the redirect URL from the address bar (the page itself won't load) and pass it — or just its "code" param — to spotify_complete_login:\n${spotify.loginUrl()}`,
   },
   {
     name: "spotify_complete_login",
-    description: "Finish Spotify login by pasting the authorization code from the redirect URL.",
+    description: "Finish Spotify login by pasting the redirect URL, or just its code parameter.",
     schema: { type: "object", properties: { code: { type: "string" } }, required: ["code"] },
     handler: async (a) => { await spotify.complete(String(a.code)); return "Spotify linked."; },
   },
@@ -271,11 +271,29 @@ async function resumePlayback(): Promise<string> {
   return "> Resumed.";
 }
 
-const mutations = new Set(["radio_play", "radio_next", "radio_prev", "radio_pause", "radio_resume", "radio_stop", "radio_volume", "podcast_play", "hoer_play", "music_play", "spotify_play_playlist", "spotify_transfer"]);
+// Mutations bump the state revision, superseding older requests that are still
+// resolving media. Volume is deliberately not one: adjusting it while a station
+// loads must not cancel that station. Its effect is still serialized, so the
+// pending play picks the new level up when it starts.
+const mutations = new Set(["radio_play", "radio_next", "radio_prev", "radio_pause", "radio_resume", "radio_stop", "podcast_play", "hoer_play", "music_play", "spotify_play_playlist", "spotify_transfer"]);
 const directEffects = new Set(["radio_pause", "radio_stop", "radio_volume", "spotify_transfer"]);
+
+// Neither the MCP SDK nor the CLI enforces `required`. Reject blank text before
+// any network call or effect: an empty device name, for one, substring-matches
+// every Spotify device and would move playback to the first.
+function checkRequired(tool: Tool, args: unknown): void {
+  const given = (args ?? {}) as Record<string, unknown>;
+  for (const key of (tool.schema.required ?? []) as string[]) {
+    if (tool.schema.properties?.[key]?.type !== "string") continue;
+    const value = given[key];
+    if (value == null || String(value).trim() === "") throw new Error(`Missing "${key}" — ${tool.name} needs a non-empty ${key}.`);
+  }
+}
+
 export async function runTool(name: string, args: unknown = {}, signal?: AbortSignal): Promise<string> {
   const tool = tools.find((t) => t.name === name);
   if (!tool) throw new Error(`Unknown tool: ${name}`);
+  checkRequired(tool, args);
   return withBudget(() => withState(() => directEffects.has(name)
     ? playbackEffect(() => tool.handler(args))
     : tool.handler(args), mutations.has(name)), signal);

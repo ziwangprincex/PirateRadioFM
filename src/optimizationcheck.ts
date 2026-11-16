@@ -227,6 +227,72 @@ test("ffplay: pause is refused, volume is kept for the next play, player survive
   } finally { drainAll(); }
 });
 
+test("ffplay: resume on a running player reports playing instead of demanding mpv", async () => {
+  const { runTool } = await import("./tools.js");
+  await withState(() => { now.source = "radio"; now.genre = "jazz"; now.state = "playing"; });
+  addPlayer(process.pid, "local-test", { player: "ffplay" });
+  try {
+    assert.match(await runTool("radio_resume"), /^> Resumed/);
+    assert.equal(livePlayers().length, 1);
+  } finally { drainAll(); }
+});
+
+test("state: a volume change does not supersede a playback request still resolving", async () => {
+  const { runTool } = await import("./tools.js");
+  await withState(() => { now.source = null; now.state = "stopped"; now.volume = 80; });
+  let ready!: () => void;
+  const started = new Promise<void>((resolve) => { ready = resolve; });
+  let playedAt = -1;
+  const pending = withState(async () => {
+    ready();
+    await sleep(150);
+    await playbackEffect(() => { playedAt = now.volume; now.genre = "resolved"; });
+  }, true);
+  await started;
+  assert.equal(await runTool("radio_volume", { level: 23 }), "vol 23");
+  await pending;
+  assert.equal(playedAt, 23, "the pending play must start at the newly chosen volume");
+  loadState();
+  assert.equal(now.genre, "resolved");
+  assert.equal(now.volume, 23);
+});
+
+test("tools: blank required text arguments are rejected before any side effect", async () => {
+  const { runTool } = await import("./tools.js");
+  // An empty name used to match every Spotify device and move playback.
+  await assert.rejects(runTool("spotify_transfer", { device: "  " }), /Missing "device"/);
+  await assert.rejects(runTool("podcast_play", {}), /Missing "target"/);
+  await assert.rejects(runTool("spotify_complete_login", { code: "" }), /Missing "code"/);
+});
+
+test("HTTP: network failures name their cause instead of a bare 'fetch failed'", async () => {
+  const server = httpServer();
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const port = (server.address() as { port: number }).port;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await assert.rejects(request(`http://127.0.0.1:${port}/`, {}, { retries: 0 }), /ECONNREFUSED/);
+});
+
+test("stop: the server's own child player is reaped on the event loop, not waited out", async (t) => {
+  // taskkill /F is synchronous on Windows; there is no grace period to wait out.
+  if (process.platform === "win32") { t.skip("POSIX signals only"); return; }
+  const { stop } = await import("./player.js");
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  await once(child, "spawn");
+  addPlayer(child.pid!, "local-test");
+  // A child that exits stays a zombie (still "alive" to kill(pid, 0)) until
+  // libuv reaps it. A blocking wait never lets that happen, so every stop in
+  // the MCP server used to sit out the full grace period and then SIGKILL.
+  let reapedDuringStop = false;
+  child.once("exit", () => { reapedDuringStop = true; });
+  const started = Date.now();
+  await stop();
+  assert.ok(reapedDuringStop, "the child must be reaped while stop() waits");
+  assert.ok(Date.now() - started < 240, `stop() took ${Date.now() - started}ms — it sat out the kill grace period`);
+  assert.equal(livePlayers().length, 0);
+});
+
 test("stop: a failed remote pause is reported but still records the stop", async () => {
   const { runTool } = await import("./tools.js");
   // Isolated HOME has no Spotify tokens, so the remote pause must fail.

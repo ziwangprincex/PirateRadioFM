@@ -69,8 +69,10 @@ function writeRaw(r: Registry): void {
 export function withLock<T>(fn: (r: Registry) => T): T {
   return withCrossProcessLock(lockPath, () => {
     const reg = readRaw();
+    const before = JSON.stringify(reg);
     const result = fn(reg);
-    writeRaw(reg);
+    // Most calls (livePlayers on every pause/resume/volume) only read.
+    if (JSON.stringify(reg) !== before) writeRaw(reg);
     return result;
   });
 }

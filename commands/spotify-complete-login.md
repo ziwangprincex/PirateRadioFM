@@ -1,6 +1,6 @@
 ---
-description: Finish Spotify login by pasting the authorization code from the redirect URL (usage — /spotify-complete-login <code>)
-argument-hint: "<code>"
+description: Finish Spotify login by pasting the redirect URL or its code (usage — /spotify-complete-login <redirect-url-or-code>)
+argument-hint: "<redirect-url-or-code>"
 allowed-tools: Bash(node:*)
 ---
 ```!

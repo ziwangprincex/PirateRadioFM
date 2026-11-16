@@ -8,7 +8,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { tools, runTool } from "./tools.js";
 import { loadState, saveState, clearAnchor, readAnchor, now } from "./state.js";
-import { stop } from "./player.js";
+import { stopSync } from "./player.js";
 import { killPid, killSameProcess, findOrphanPlayers } from "./proc.js";
 import { claimAnchor, playerMarker, type Anchor } from "./session.js";
 import { readRegistryUnsafe } from "./lock.js";
@@ -26,7 +26,7 @@ loadState();
 let ourAnchor: Anchor;
 try {
   ourAnchor = claimAnchor((old) => {
-    stop(old?.sessionId ?? "legacy");
+    stopSync(old?.sessionId ?? "legacy");
     now.state = "stopped";
     now.source = null;
     now.spotifyVerifier = null;

@@ -114,8 +114,17 @@ export function killSameProcess(pid: number, token: string | null): void {
 // --- killing ---------------------------------------------------------------
 // Terminate a process (and its children on Windows). Best-effort: a PID that is
 // already gone is a success, not an error.
-export function killPid(pid: number | null | undefined): void {
-  if (!pid || !Number.isInteger(pid) || pid <= 0) return;
+//
+// Best-effort graceful shutdown first: mpv/ffplay respond to SIGTERM quickly.
+// Escalate to SIGKILL after a short grace period if they don't — otherwise a
+// network-stuck player could survive the "stop" indefinitely and defeat the
+// whole point of this call. Poll finely: players normally exit within a few ms.
+const KILL_GRACE_MS = 250;
+const KILL_POLL_MS = 5;
+
+// Sends the graceful signal; false when there is nothing left to wait for.
+function terminate(pid: number | null | undefined): pid is number {
+  if (!pid || !Number.isInteger(pid) || pid <= 0) return false;
   try {
     if (isWin) {
       // process.kill on win32 can't reliably take down the whole tree; taskkill
@@ -125,23 +134,47 @@ export function killPid(pid: number | null | undefined): void {
         timeout: 8000,
         windowsHide: true,
       });
-    } else {
-      // Best-effort graceful shutdown first: mpv/ffplay respond to SIGTERM
-      // quickly. Fall through to SIGKILL after a short wait if they don't —
-      // otherwise a network-stuck player could survive the "stop" indefinitely
-      // and defeat the whole point of this call.
-      process.kill(pid, "SIGTERM");
-      const deadline = Date.now() + 250;
-      while (Date.now() < deadline && pidAlive(pid)) {
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
-      }
-      if (pidAlive(pid)) {
-        try { process.kill(pid, "SIGKILL"); } catch { /* raced with exit — fine */ }
-      }
+      return false;
     }
+    process.kill(pid, "SIGTERM");
+    return true;
   } catch {
-    /* already dead, or not ours — fine */
+    return false; // already dead, or not ours — fine
   }
+}
+
+function forceKill(pid: number): void {
+  if (pidAlive(pid)) {
+    try { process.kill(pid, "SIGKILL"); } catch { /* raced with exit — fine */ }
+  }
+}
+
+// Blocking variant for exit/startup/watchdog paths that cannot await.
+export function killPid(pid: number | null | undefined): void {
+  if (!terminate(pid)) return;
+  const deadline = Date.now() + KILL_GRACE_MS;
+  while (Date.now() < deadline && pidAlive(pid)) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, KILL_POLL_MS);
+  }
+  forceKill(pid);
+}
+
+// Waits on the event loop instead. When the target is this process's own child
+// (players and watchdogs spawned by the MCP server), it stays a zombie — and
+// pidAlive stays true — until libuv reaps it, which a blocking wait prevents:
+// every stop would sit out the full grace period and then SIGKILL a player
+// that had already exited.
+export async function killPidAsync(pid: number | null | undefined): Promise<void> {
+  if (!terminate(pid)) return;
+  const deadline = Date.now() + KILL_GRACE_MS;
+  while (Date.now() < deadline && pidAlive(pid)) {
+    await new Promise((resolve) => setTimeout(resolve, KILL_POLL_MS));
+  }
+  forceKill(pid);
+}
+
+export async function killSameProcessAsync(pid: number, token: string | null): Promise<void> {
+  if (sameProcess(pid, token)) await killPidAsync(pid);
 }
 
 // --- orphan discovery ------------------------------------------------------
@@ -167,14 +200,31 @@ export function findOrphanPlayers(marker: string): number[] {
       return parsePidLines(out, "\t", matches);
     }
     // Use the OS executable name, NOT arbitrary occurrences in argv. macOS
-    // ucomm is the basename; Linux comm provides the equivalent column.
-    const out = execFileSync("ps", ["-eo", isMac ? "pid=,ucomm=,args=" : "pid=,comm=,args="], {
-      encoding: "utf8",
-      timeout: 8000,
-    });
-    return parseUnixPs(out, matches);
+    // ucomm is the basename; Linux comm provides the equivalent column. List
+    // names first: argv is the expensive column (~2x the cost of the whole
+    // listing on macOS), and it is only needed for actual players — usually none.
+    const comm = isMac ? "ucomm=" : "comm=";
+    const players: number[] = [];
+    for (const line of ps(["-eo", `pid=,${comm}`]).split("\n")) {
+      const row = line.trim().match(/^(\d+)\s+(?:mpv|ffplay)$/);
+      if (row) players.push(Number(row[1]));
+    }
+    if (players.length === 0) return [];
+    return parseUnixPs(ps(["-o", `pid=,${comm},args=`, "-p", players.join(",")]), matches);
   } catch {
     return [];
+  }
+}
+
+// ps exits non-zero when a -p list matched nothing (every candidate exited in
+// the meantime); its stdout is still the right answer.
+function ps(args: string[]): string {
+  try {
+    return execFileSync("ps", args, { encoding: "utf8", timeout: 8000 });
+  } catch (e) {
+    const stdout = (e as { stdout?: unknown }).stdout;
+    if (typeof stdout === "string" && (e as { status?: unknown }).status === 1) return stdout;
+    throw e;
   }
 }
 
@@ -217,7 +267,7 @@ export interface HostProcess { pid: number; token: string | null; }
 interface ProcInfo { pid: number; ppid: number; name: string; args: string; }
 
 function isPiProcess(name: string, args: string): boolean {
-  // `name` is argv[0]'s basename (see enumerateProcesses), so the npm-bin case
+  // `name` is argv[0]'s basename (see ancestors), so the npm-bin case
   // — a compiled `pi` binary, however deep its install path — is an exact match
   // on either platform. A node-script install instead shows the interpreter as
   // argv[0] with the script as argv[1], so check that too.
@@ -235,7 +285,10 @@ function isPiProcess(name: string, args: string): boolean {
   return base === "pi" || base === "pi.js";
 }
 
-// One-shot snapshot of every process on the host: pid → {ppid, name, args}.
+// This process's ancestors, nearest first (at most 32, stopping at init or a
+// broken link). On unix the chain comes from a cheap pid/ppid listing and argv
+// is read for just those few processes: argv is the expensive column, and
+// listing it for every process roughly doubled the cost of each CLI call.
 //
 // On unix we deliberately do NOT ask ps for `comm=`. macOS renders comm as the
 // truncated-to-16-chars FULL PATH ("/usr/libexec/dpr"), not a basename, and it
@@ -244,54 +297,70 @@ function isPiProcess(name: string, args: string): boolean {
 // only pid/ppid (always numeric, always first) and treat the entire remainder
 // as args, then derive `name` from argv[0]'s basename ourselves. This is
 // intentionally separate from the executable-name check used for players.
-function enumerateProcesses(): Map<number, ProcInfo> {
-  const map = new Map<number, ProcInfo>();
-  if (isWin) {
-    // One PowerShell call, JSON out. CommandLine is null for kernel processes.
-    const out = execFileSync(
-      "powershell",
-      [
-        "-NoProfile",
-        "-Command",
-        "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | " +
-          "Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress",
-      ],
-      { encoding: "utf8", timeout: 8000, windowsHide: true }
-    );
-    const rows: Array<{ ProcessId?: number; ParentProcessId?: number; Name?: string; CommandLine?: string | null }> =
-      JSON.parse(out.trim() || "[]");
-    for (const r of Array.isArray(rows) ? rows : [rows]) {
-      if (!r.ProcessId) continue;
-      map.set(r.ProcessId, {
-        pid: r.ProcessId,
-        ppid: r.ParentProcessId ?? 0,
-        name: r.Name ?? "",
-        args: r.CommandLine ?? "",
-      });
-    }
-    return map;
+function ancestors(): ProcInfo[] {
+  if (isWin) return walk(enumerateWindowsProcesses());
+  const parents = new Map<number, ProcInfo>();
+  for (const line of ps(["-eo", "pid=,ppid="]).split("\n")) {
+    const m = line.trim().match(/^(\d+)\s+(\d+)$/);
+    if (m) parents.set(Number(m[1]), { pid: Number(m[1]), ppid: Number(m[2]), name: "", args: "" });
   }
-  const out = execFileSync("ps", ["-eo", "pid=,ppid=,args="], {
-    encoding: "utf8",
-    timeout: 8000,
-  });
-  for (const line of out.split("\n")) {
-    const t = line.trim();
-    if (!t) continue;
+  const chain = walk(parents);
+  if (chain.length === 0) return [];
+  const procs = new Map<number, ProcInfo>();
+  for (const line of ps(["-o", "pid=,ppid=,args=", "-p", chain.map((p) => p.pid).join(",")]).split("\n")) {
     // Split off exactly two leading numeric columns; everything after is argv,
     // preserved verbatim (no whitespace collapsing).
-    const m = t.match(/^(\d+)\s+(\d+)\s+([\s\S]*)$/);
+    const m = line.trim().match(/^(\d+)\s+(\d+)\s+([\s\S]*)$/);
     if (!m) continue;
     const pid = Number(m[1]);
-    if (!Number.isInteger(pid) || pid <= 0) continue;
     const args = m[3];
     // argv[0]'s basename. Kernel threads show as "[kthread]" and have no path.
     const argv0 = args.split(" ")[0] ?? "";
-    map.set(pid, {
-      pid,
-      ppid: Number(m[2]) || 0,
-      name: argv0.slice(argv0.lastIndexOf("/") + 1),
-      args,
+    procs.set(pid, { pid, ppid: Number(m[2]) || 0, name: argv0.slice(argv0.lastIndexOf("/") + 1), args });
+  }
+  // Re-walk with the second listing's own ppids: an ancestor that exited (or a
+  // PID reused under another parent) between the two calls ends the chain
+  // there, exactly as a gap in one snapshot would.
+  return walk(procs);
+}
+
+function walk(procs: Map<number, ProcInfo>): ProcInfo[] {
+  const chain: ProcInfo[] = [];
+  const seen = new Set<number>();
+  let pid = process.ppid;
+  for (let depth = 0; depth < 32 && pid > 1 && !seen.has(pid); depth++) {
+    seen.add(pid);
+    const p = procs.get(pid);
+    if (!p) break; // chain broken (ps raced a process exit) — give up
+    chain.push(p);
+    pid = p.ppid;
+  }
+  return chain;
+}
+
+// One PowerShell call, JSON out (PowerShell startup dominates, so a narrower
+// query would not help). CommandLine is null for kernel processes.
+function enumerateWindowsProcesses(): Map<number, ProcInfo> {
+  const map = new Map<number, ProcInfo>();
+  const out = execFileSync(
+    "powershell",
+    [
+      "-NoProfile",
+      "-Command",
+      "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | " +
+        "Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress",
+    ],
+    { encoding: "utf8", timeout: 8000, windowsHide: true }
+  );
+  const rows: Array<{ ProcessId?: number; ParentProcessId?: number; Name?: string; CommandLine?: string | null }> =
+    JSON.parse(out.trim() || "[]");
+  for (const r of Array.isArray(rows) ? rows : [rows]) {
+    if (!r.ProcessId) continue;
+    map.set(r.ProcessId, {
+      pid: r.ProcessId,
+      ppid: r.ParentProcessId ?? 0,
+      name: r.Name ?? "",
+      args: r.CommandLine ?? "",
     });
   }
   return map;
@@ -302,15 +371,8 @@ function enumerateProcesses(): Map<number, ProcInfo> {
 // no session to bind to, music keeps playing until explicitly stopped).
 export function findPiProcess(): HostProcess | null {
   try {
-    const procs = enumerateProcesses();
-    const seen = new Set<number>();
-    let pid = process.ppid;
-    for (let depth = 0; depth < 32 && pid > 1 && !seen.has(pid); depth++) {
-      seen.add(pid);
-      const p = procs.get(pid);
-      if (!p) break; // chain broken (ps raced a process exit) — give up
-      if (isPiProcess(p.name, p.args)) return { pid, token: procStartToken(pid) };
-      pid = p.ppid;
+    for (const p of ancestors()) {
+      if (isPiProcess(p.name, p.args)) return { pid: p.pid, token: procStartToken(p.pid) };
     }
   } catch {
     /* enumeration failed — no fallback anchor */

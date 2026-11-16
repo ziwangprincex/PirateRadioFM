@@ -1,5 +1,5 @@
 import { promisify } from "node:util";
-import { request, operationSignal } from "../http.js";
+import { request, operationSignal, checkCancelled } from "../http.js";
 // HÖR Berlin (hoer.live) source. HÖR has no Icecast/HLS audio endpoint — its
 // "radio" is a YouTube live stream embedded on the homepage (the same page
 // shows the latest archived set outside broadcast hours). So: scrape the
@@ -56,6 +56,9 @@ async function resolveAudioUrl(id: string): Promise<string> {
   try {
     out = (await promisify(execFile)("yt-dlp", args, { encoding: "utf8", timeout: 30_000, windowsHide: true, signal: operationSignal() })).stdout;
   } catch (e) {
+    // A cancelled command or an exhausted operation budget is not a yt-dlp
+    // failure; report it as such instead of blaming the video.
+    checkCancelled();
     if ((e as NodeJS.ErrnoException).code === "ENOENT")
       throw new Error(
         "HÖR streams via YouTube, which needs yt-dlp:\n" +
@@ -77,6 +80,8 @@ async function resolveAudioUrl(id: string): Promise<string> {
           "  HOER_COOKIES_FROM_BROWSER=chrome   (must close Chrome first on Windows)\n" +
           "  HOER_COOKIES_FILE=/path/to/cookies.txt  (exported Netscape cookies — always works)",
       );
+    if ((e as { killed?: boolean }).killed)
+      throw new Error("yt-dlp timed out resolving the HÖR stream (slow network, or YouTube is throttling). Try again.");
     throw new Error("yt-dlp couldn't resolve the HÖR stream (video may be members-only or region-locked).");
   }
   const url = out.trim().split("\n")[0];

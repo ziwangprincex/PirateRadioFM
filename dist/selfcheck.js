@@ -10,8 +10,8 @@ import { fileURLToPath as fileURLToPath3 } from "node:url";
 // src/player.ts
 import { spawn, execFileSync as execFileSync2 } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { dirname as dirname2, join as join4 } from "node:path";
-import { mkdirSync as mkdirSync4, rmSync as rmSync2 } from "node:fs";
+import { basename, dirname as dirname2, join as join4 } from "node:path";
+import { mkdtempSync, rmSync as rmSync2, rmdirSync as rmdirSync2 } from "node:fs";
 import { tmpdir } from "node:os";
 import { randomUUID as randomUUID3 } from "node:crypto";
 
@@ -89,11 +89,10 @@ function sameProcess(pid, token) {
   const cur = procStartToken(pid);
   return cur === null ? true : cur === token;
 }
-function killSameProcess(pid, token) {
-  if (sameProcess(pid, token)) killPid(pid);
-}
-function killPid(pid) {
-  if (!pid || !Number.isInteger(pid) || pid <= 0) return;
+var KILL_GRACE_MS = 250;
+var KILL_POLL_MS = 5;
+function terminate(pid) {
+  if (!pid || !Number.isInteger(pid) || pid <= 0) return false;
   try {
     if (isWin) {
       execFileSync("taskkill", ["/F", "/PID", String(pid), "/T"], {
@@ -101,28 +100,39 @@ function killPid(pid) {
         timeout: 8e3,
         windowsHide: true
       });
-    } else {
-      process.kill(pid, "SIGTERM");
-      const deadline = Date.now() + 250;
-      while (Date.now() < deadline && pidAlive(pid)) {
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
-      }
-      if (pidAlive(pid)) {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {
-        }
-      }
+      return false;
     }
+    process.kill(pid, "SIGTERM");
+    return true;
   } catch {
+    return false;
   }
+}
+function forceKill(pid) {
+  if (pidAlive(pid)) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+    }
+  }
+}
+async function killPidAsync(pid) {
+  if (!terminate(pid)) return;
+  const deadline = Date.now() + KILL_GRACE_MS;
+  while (Date.now() < deadline && pidAlive(pid)) {
+    await new Promise((resolve) => setTimeout(resolve, KILL_POLL_MS));
+  }
+  forceKill(pid);
+}
+async function killSameProcessAsync(pid, token) {
+  if (sameProcess(pid, token)) await killPidAsync(pid);
 }
 function findOrphanPlayers(marker) {
   if (!/^pirate-radio-[a-f0-9]{24}$/.test(marker)) return [];
   const matches = (cmd) => cmd.split(/[\s\"]+/).some((arg) => arg === `--title=${marker}` || arg === marker);
   try {
     if (isWin) {
-      const out2 = execFileSync(
+      const out = execFileSync(
         "powershell",
         [
           "-NoProfile",
@@ -131,15 +141,27 @@ function findOrphanPlayers(marker) {
         ],
         { encoding: "utf8", timeout: 8e3, windowsHide: true }
       );
-      return parsePidLines(out2, "	", matches);
+      return parsePidLines(out, "	", matches);
     }
-    const out = execFileSync("ps", ["-eo", isMac ? "pid=,ucomm=,args=" : "pid=,comm=,args="], {
-      encoding: "utf8",
-      timeout: 8e3
-    });
-    return parseUnixPs(out, matches);
+    const comm = isMac ? "ucomm=" : "comm=";
+    const players = [];
+    for (const line of ps(["-eo", `pid=,${comm}`]).split("\n")) {
+      const row = line.trim().match(/^(\d+)\s+(?:mpv|ffplay)$/);
+      if (row) players.push(Number(row[1]));
+    }
+    if (players.length === 0) return [];
+    return parseUnixPs(ps(["-o", `pid=,${comm},args=`, "-p", players.join(",")]), matches);
   } catch {
     return [];
+  }
+}
+function ps(args) {
+  try {
+    return execFileSync("ps", args, { encoding: "utf8", timeout: 8e3 });
+  } catch (e) {
+    const stdout = e.stdout;
+    if (typeof stdout === "string" && e.status === 1) return stdout;
+    throw e;
   }
 }
 function parsePidLines(out, sep, matches) {
@@ -170,63 +192,66 @@ function isPiProcess(name, args) {
   const base = argv1.slice(argv1.lastIndexOf("/") + 1);
   return base === "pi" || base === "pi.js";
 }
-function enumerateProcesses() {
-  const map = /* @__PURE__ */ new Map();
-  if (isWin) {
-    const out2 = execFileSync(
-      "powershell",
-      [
-        "-NoProfile",
-        "-Command",
-        "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress"
-      ],
-      { encoding: "utf8", timeout: 8e3, windowsHide: true }
-    );
-    const rows = JSON.parse(out2.trim() || "[]");
-    for (const r of Array.isArray(rows) ? rows : [rows]) {
-      if (!r.ProcessId) continue;
-      map.set(r.ProcessId, {
-        pid: r.ProcessId,
-        ppid: r.ParentProcessId ?? 0,
-        name: r.Name ?? "",
-        args: r.CommandLine ?? ""
-      });
-    }
-    return map;
+function ancestors() {
+  if (isWin) return walk(enumerateWindowsProcesses());
+  const parents = /* @__PURE__ */ new Map();
+  for (const line of ps(["-eo", "pid=,ppid="]).split("\n")) {
+    const m = line.trim().match(/^(\d+)\s+(\d+)$/);
+    if (m) parents.set(Number(m[1]), { pid: Number(m[1]), ppid: Number(m[2]), name: "", args: "" });
   }
-  const out = execFileSync("ps", ["-eo", "pid=,ppid=,args="], {
-    encoding: "utf8",
-    timeout: 8e3
-  });
-  for (const line of out.split("\n")) {
-    const t = line.trim();
-    if (!t) continue;
-    const m = t.match(/^(\d+)\s+(\d+)\s+([\s\S]*)$/);
+  const chain = walk(parents);
+  if (chain.length === 0) return [];
+  const procs = /* @__PURE__ */ new Map();
+  for (const line of ps(["-o", "pid=,ppid=,args=", "-p", chain.map((p) => p.pid).join(",")]).split("\n")) {
+    const m = line.trim().match(/^(\d+)\s+(\d+)\s+([\s\S]*)$/);
     if (!m) continue;
     const pid = Number(m[1]);
-    if (!Number.isInteger(pid) || pid <= 0) continue;
     const args = m[3];
     const argv0 = args.split(" ")[0] ?? "";
-    map.set(pid, {
-      pid,
-      ppid: Number(m[2]) || 0,
-      name: argv0.slice(argv0.lastIndexOf("/") + 1),
-      args
+    procs.set(pid, { pid, ppid: Number(m[2]) || 0, name: argv0.slice(argv0.lastIndexOf("/") + 1), args });
+  }
+  return walk(procs);
+}
+function walk(procs) {
+  const chain = [];
+  const seen = /* @__PURE__ */ new Set();
+  let pid = process.ppid;
+  for (let depth = 0; depth < 32 && pid > 1 && !seen.has(pid); depth++) {
+    seen.add(pid);
+    const p = procs.get(pid);
+    if (!p) break;
+    chain.push(p);
+    pid = p.ppid;
+  }
+  return chain;
+}
+function enumerateWindowsProcesses() {
+  const map = /* @__PURE__ */ new Map();
+  const out = execFileSync(
+    "powershell",
+    [
+      "-NoProfile",
+      "-Command",
+      "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress"
+    ],
+    { encoding: "utf8", timeout: 8e3, windowsHide: true }
+  );
+  const rows = JSON.parse(out.trim() || "[]");
+  for (const r of Array.isArray(rows) ? rows : [rows]) {
+    if (!r.ProcessId) continue;
+    map.set(r.ProcessId, {
+      pid: r.ProcessId,
+      ppid: r.ParentProcessId ?? 0,
+      name: r.Name ?? "",
+      args: r.CommandLine ?? ""
     });
   }
   return map;
 }
 function findPiProcess() {
   try {
-    const procs = enumerateProcesses();
-    const seen = /* @__PURE__ */ new Set();
-    let pid = process.ppid;
-    for (let depth = 0; depth < 32 && pid > 1 && !seen.has(pid); depth++) {
-      seen.add(pid);
-      const p = procs.get(pid);
-      if (!p) break;
-      if (isPiProcess(p.name, p.args)) return { pid, token: procStartToken(pid) };
-      pid = p.ppid;
+    for (const p of ancestors()) {
+      if (isPiProcess(p.name, p.args)) return { pid: p.pid, token: procStartToken(p.pid) };
     }
   } catch {
   }
@@ -307,12 +332,12 @@ ${procStartToken(process.pid) ?? ""}`);
 }
 function withCrossProcessLock(lockPath2, fn) {
   const steps = acquireSteps(lockPath2);
-  let step = steps.next();
-  while (!step.done) {
+  let step2 = steps.next();
+  while (!step2.done) {
     sleep(50);
-    step = steps.next();
+    step2 = steps.next();
   }
-  const owner = step.value;
+  const owner = step2.value;
   try {
     const result = fn();
     if (result && typeof result.then === "function") {
@@ -336,9 +361,9 @@ async function acquireAsyncCrossProcessLock(path, signal) {
   try {
     for (; ; ) {
       signal?.throwIfAborted();
-      const step = steps.next();
-      if (step.done) {
-        const owner = step.value;
+      const step2 = steps.next();
+      if (step2.done) {
+        const owner = step2.value;
         return () => release(path, owner);
       }
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -434,8 +459,9 @@ function writeRaw(r) {
 function withLock(fn) {
   return withCrossProcessLock(lockPath, () => {
     const reg = readRaw();
+    const before = JSON.stringify(reg);
     const result = fn(reg);
-    writeRaw(reg);
+    if (JSON.stringify(reg) !== before) writeRaw(reg);
     return result;
   });
 }
@@ -510,6 +536,11 @@ async function wait(ms) {
   checkCancelled();
   await delay(ms, void 0, { signal: operationSignal() });
 }
+function networkError(e) {
+  const cause = e?.cause;
+  const detail = cause?.message || cause?.code;
+  return e instanceof TypeError && detail ? new Error(`Network error: ${detail}`, { cause: e }) : e;
+}
 async function request(url, init = {}, options = {}) {
   const deadline = Date.now() + (options.budgetMs ?? 15e3);
   const method = (init.method ?? "GET").toUpperCase();
@@ -569,7 +600,7 @@ async function request(url, init = {}, options = {}) {
       }
     } catch (e) {
       parent?.throwIfAborted();
-      if (attempt >= retries) throw e;
+      if (attempt >= retries) throw networkError(e);
     } finally {
       clearTimeout(timer);
       parent?.removeEventListener("abort", abort);
@@ -649,33 +680,40 @@ function playerAvailable() {
 function installHint() {
   return "No audio player found. Install mpv (recommended) or ffmpeg:\n  macOS:   brew install mpv\n  Windows: winget install mpv   (or scoop install mpv)\n  Linux:   sudo apt install mpv  (or your package manager)";
 }
-function stop(id = sessionId()) {
+async function stop(id = sessionId()) {
   const { players, watchdogs } = drainAll(id);
-  for (const p of players) {
-    killSameProcess(p.pid, p.token);
-    if (p.ipc && process.platform !== "win32") {
-      try {
-        rmSync2(p.ipc, { force: true });
-      } catch {
-      }
-    }
-  }
-  for (const w of watchdogs) if (w.pid !== process.pid) killSameProcess(w.pid, w.token);
-  for (const pid of findOrphanPlayers(playerMarker(id))) killPid(pid);
+  await Promise.all([
+    ...players.map(async (p) => {
+      await killSameProcessAsync(p.pid, p.token);
+      removeIpc(p.ipc);
+    }),
+    ...watchdogs.filter((w) => w.pid !== process.pid).map((w) => killSameProcessAsync(w.pid, w.token))
+  ]);
+  await Promise.all(findOrphanPlayers(playerMarker(id)).map((pid) => killPidAsync(pid)));
 }
 var here = dirname2(fileURLToPath(import.meta.url));
 function ipcPath() {
-  const id = randomUUID3();
-  if (process.platform === "win32") return `\\\\.\\pipe\\pirate-radio-${id}`;
-  const dir2 = join4(tmpdir(), `pr-${process.getuid?.() ?? "user"}`);
-  mkdirSync4(dir2, { recursive: true, mode: 448 });
-  return join4(dir2, `${id}.sock`);
+  if (process.platform === "win32") return `\\\\.\\pipe\\pirate-radio-${randomUUID3()}`;
+  return join4(mkdtempSync(join4(tmpdir(), "pr-")), "mpv.sock");
+}
+function removeIpc(ipc) {
+  if (!ipc || process.platform === "win32") return;
+  try {
+    rmSync2(ipc, { force: true });
+  } catch {
+  }
+  if (basename(dirname2(ipc)).startsWith("pr-")) {
+    try {
+      rmdirSync2(dirname2(ipc));
+    } catch {
+    }
+  }
 }
 async function play(url, volume) {
   checkCancelled();
   const player = detect();
   if (!player) throw new Error(installHint());
-  stop();
+  await stop();
   const marker = playerMarker();
   const ipc = player === "mpv" ? ipcPath() : void 0;
   const args = player === "mpv" ? ["--no-config", "--no-video", "--really-quiet", `--title=${marker}`, `--input-ipc-server=${ipc}`, `--volume=${volume}`, "--", url] : ["-nodisp", "-autoexit", "-loglevel", "quiet", "-window_title", marker, "-volume", String(volume), "-i", url];
@@ -713,7 +751,7 @@ async function play(url, volume) {
           break;
         } catch (e) {
           if (Date.now() >= deadline) throw e;
-          await wait(50);
+          await wait(10);
         }
       }
     }
@@ -721,25 +759,20 @@ async function play(url, volume) {
     child.unref();
   } catch (e) {
     if (pid) {
-      killPid(pid);
+      await killPidAsync(pid);
       removePlayer(pid);
     }
-    if (ipc && process.platform !== "win32") {
-      try {
-        rmSync2(ipc, { force: true });
-      } catch {
-      }
-    }
+    removeIpc(ipc);
     throw e;
   }
 }
 async function setPaused(paused) {
   const players = livePlayers();
   if (!players.length) return false;
-  if (players.some((p) => !p.ipc)) throw new Error("Pause/resume without restarting requires mpv. Use radio_stop or install mpv.");
+  if (paused && players.some((p) => !p.ipc)) throw new Error("Pausing without restarting requires mpv. Use radio_stop or install mpv.");
   for (const p of players) {
     if (!sameProcess(p.pid, p.token)) throw new Error("Player exited");
-    await mpvCommand(p.ipc, ["set_property", "pause", paused]);
+    if (p.ipc) await mpvCommand(p.ipc, ["set_property", "pause", paused]);
   }
   return true;
 }
@@ -788,13 +821,13 @@ function spawnWatchdogProc(kind, anchorPid, token, playerPid) {
 }
 
 // src/sources/spotify.ts
-import { readFileSync as readFileSync6, writeFileSync as writeFileSync5, mkdirSync as mkdirSync6, existsSync as existsSync4, renameSync as renameSync5 } from "node:fs";
+import { readFileSync as readFileSync6, writeFileSync as writeFileSync5, mkdirSync as mkdirSync5, existsSync as existsSync4, renameSync as renameSync5 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { join as join6 } from "node:path";
 import { createHash as createHash2, randomBytes } from "node:crypto";
 
 // src/state.ts
-import { readFileSync as readFileSync5, writeFileSync as writeFileSync4, renameSync as renameSync4, mkdirSync as mkdirSync5, existsSync as existsSync3 } from "node:fs";
+import { readFileSync as readFileSync5, writeFileSync as writeFileSync4, renameSync as renameSync4, mkdirSync as mkdirSync4, existsSync as existsSync3 } from "node:fs";
 import { join as join5 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
 var stateDir = dataDir();
@@ -938,7 +971,7 @@ function loadTokens() {
   }
 }
 function saveTokens(t) {
-  mkdirSync6(cfgDir, { recursive: true });
+  mkdirSync5(cfgDir, { recursive: true });
   const tmp = `${tokenPath}.${process.pid}.tmp`;
   writeFileSync5(tmp, JSON.stringify(t, null, 2), { mode: 384 });
   renameSync5(tmp, tokenPath);
@@ -957,12 +990,28 @@ function loginUrl() {
   });
   return `${AUTH}/authorize?${p}`;
 }
-async function complete(code) {
+function authorizationCode(input) {
+  const s = input.trim();
+  let params = null;
+  if (/^https?:\/\//i.test(s)) {
+    try {
+      params = new URL(s).searchParams;
+    } catch {
+    }
+  } else if (/^\??code=/.test(s)) params = new URLSearchParams(s.replace(/^\?/, ""));
+  if (!params) return s;
+  const denied = params.get("error");
+  if (denied) throw new Error(`Spotify login was not approved (${denied}). Run spotify_login again.`);
+  const code = params.get("code");
+  if (!code) throw new Error("No code= parameter in what was pasted. Copy the full redirect URL after approving.");
+  return code;
+}
+async function complete(pasted) {
   const v = now.spotifyVerifier;
   if (!v) throw new Error("Call spotify_login first to start the flow.");
   const body = new URLSearchParams({
     grant_type: "authorization_code",
-    code,
+    code: authorizationCode(pasted),
     redirect_uri: REDIRECT,
     client_id: clientId(),
     code_verifier: v
@@ -1008,15 +1057,26 @@ async function api(path, init) {
     ...init,
     headers: { ...init?.headers ?? {}, Authorization: `Bearer ${tok}` }
   });
-  if (r.status === 404)
-    throw statusError(404, "No active Spotify device found. Open the Spotify app (Premium required) and play something once, then retry \u2014 or use spotify_devices.");
-  if (r.status === 403)
-    throw statusError(403, "Spotify refused the command. Premium is required for playback control.");
   if (!r.ok) {
-    const body = await r.text().catch(() => "");
-    throw statusError(r.status, `Spotify API ${r.status}: ${body.slice(0, 200) || r.statusText}`);
+    const body = r.status === 404 ? "" : await r.text().catch(() => "");
+    throw statusError(r.status, spotifyErrorMessage(r.status, body, r.statusText));
   }
   return r;
+}
+function spotifyErrorMessage(status, body, statusText = "") {
+  if (status === 404)
+    return "No active Spotify device found. Open the Spotify app (Premium required) and play something once, then retry \u2014 or use spotify_devices.";
+  let message = "", reason = "";
+  try {
+    const error = JSON.parse(body).error;
+    if (typeof error?.message === "string") message = error.message;
+    if (typeof error?.reason === "string") reason = error.reason;
+  } catch {
+  }
+  if (status === 403) {
+    return reason === "PREMIUM_REQUIRED" || /premium/i.test(message) || !message && !reason ? "Spotify refused the command. Premium is required for playback control." : `Spotify refused the command: ${message || reason}.`;
+  }
+  return `Spotify API ${status}: ${(message || body).slice(0, 200) || statusText}`;
 }
 function statusError(status, message) {
   const e = new Error(message);
@@ -1122,7 +1182,7 @@ async function playContext(uriOrName) {
   }
   await playbackEffect(async () => {
     await playWithRecovery(playBody(uri));
-    stop();
+    await stop();
   });
   now.state = "playing";
   now.source = "spotify";
@@ -1219,7 +1279,7 @@ async function play2(target) {
       throw new Error(
         `Nothing in your Music library matches "${target}". AppleScript can only play what's already in the library \u2014 add it in Music.app first.`
       );
-    stop();
+    await stop();
     if (now.source === "spotify") {
       try {
         await pause();
@@ -1460,8 +1520,14 @@ function parseArgs(rest, schema) {
 
 // src/sources/podcast.ts
 var MAX_EPISODES = 50;
+var NAMED_ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: "\xA0" };
 function decodeEntities(s) {
-  return s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#0*39;|&apos;/g, "'");
+  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (match, entity) => {
+    if (entity[0] !== "#") return NAMED_ENTITIES[entity] ?? match;
+    const hex = entity[1] === "x" || entity[1] === "X";
+    const code = parseInt(entity.slice(hex ? 2 : 1), hex ? 16 : 10);
+    return code > 0 && code <= 1114111 ? String.fromCodePoint(code) : match;
+  });
 }
 function textOf(block, tag) {
   const m = block.match(new RegExp(`<${tag}[^>]*>\\s*(?:<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>|([\\s\\S]*?))\\s*</${tag}>`, "i"));
@@ -1539,11 +1605,10 @@ async function resolveFeed(target) {
   if (!hit) throw new Error(`No podcast found for "${target}". Try a different name or paste an RSS URL.`);
   return { feedUrl: hit.feedUrl, name: hit.collectionName ?? null };
 }
-async function playIndex(feedUrl, name, index, strict = false) {
+async function playEpisode(feedUrl, name, choose) {
   const { channel, episodes } = parseFeed(await fetchText(feedUrl, true));
   if (episodes.length === 0) throw new Error("The feed has no playable episodes (no audio enclosures).");
-  if (strict && index >= episodes.length) throw new Error(`Already at the oldest episode (${episodes.length} available).`);
-  const i = Math.max(0, Math.min(index, episodes.length - 1));
+  const i = choose(episodes);
   const ep = episodes[i];
   const direct = await resolveDirect(ep.url);
   await playbackEffect(async () => {
@@ -1568,22 +1633,36 @@ async function playIndex(feedUrl, name, index, strict = false) {
 }
 async function playQuery(target) {
   const { feedUrl, name } = await resolveFeed(target);
-  return playIndex(feedUrl, name, 0);
+  return playEpisode(feedUrl, name, () => 0);
 }
 function requireCurrent() {
   if (now.source !== "podcast" || !now.podcastFeed)
     throw new Error("No podcast is playing. Use podcast_play first.");
   return now.podcastFeed;
 }
-async function next3() {
-  return playIndex(requireCurrent(), now.podcastName, now.episodeIndex + 1, true);
+function locateEpisode(episodes, title, index) {
+  let found = -1;
+  episodes.forEach((ep, i) => {
+    if (title && ep.title === title && (found < 0 || Math.abs(i - index) < Math.abs(found - index))) found = i;
+  });
+  return found >= 0 ? found : index;
 }
-async function prev3() {
-  if (now.episodeIndex <= 0) throw new Error("Already at the newest episode.");
-  return playIndex(requireCurrent(), now.podcastName, now.episodeIndex - 1);
+async function step(offset) {
+  return playEpisode(requireCurrent(), now.podcastName, (episodes) => {
+    const i = locateEpisode(episodes, now.title, now.episodeIndex) + offset;
+    if (offset > 0 && i >= episodes.length) throw new Error(`Already at the oldest episode (${episodes.length} available).`);
+    if (offset < 0 && i < 0) throw new Error("Already at the newest episode.");
+    return Math.max(0, Math.min(i, episodes.length - 1));
+  });
 }
-async function resume3() {
-  return playIndex(requireCurrent(), now.podcastName, now.episodeIndex);
+function next3() {
+  return step(1);
+}
+function prev3() {
+  return step(-1);
+}
+function resume3() {
+  return step(0);
 }
 
 // src/sources/hoer.ts
@@ -1617,6 +1696,7 @@ async function resolveAudioUrl(id) {
   try {
     out = (await promisify(execFile)("yt-dlp", args, { encoding: "utf8", timeout: 3e4, windowsHide: true, signal: operationSignal() })).stdout;
   } catch (e) {
+    checkCancelled();
     if (e.code === "ENOENT")
       throw new Error(
         "H\xD6R streams via YouTube, which needs yt-dlp:\n  macOS:   brew install yt-dlp\n  Windows: winget install yt-dlp\n  Linux:   pipx install yt-dlp  (or your package manager)"
@@ -1630,6 +1710,8 @@ async function resolveAudioUrl(id) {
       throw new Error(
         "YouTube blocked this stream with a bot check. Authenticate yt-dlp:\n  HOER_COOKIES_FROM_BROWSER=firefox  (works while open)\n  HOER_COOKIES_FROM_BROWSER=chrome   (must close Chrome first on Windows)\n  HOER_COOKIES_FILE=/path/to/cookies.txt  (exported Netscape cookies \u2014 always works)"
       );
+    if (e.killed)
+      throw new Error("yt-dlp timed out resolving the H\xD6R stream (slow network, or YouTube is throttling). Try again.");
     throw new Error("yt-dlp couldn't resolve the H\xD6R stream (video may be members-only or region-locked).");
   }
   const url = out.trim().split("\n")[0];
@@ -1818,11 +1900,11 @@ ${describe()}`
     schema: noArgs,
     handler: async () => {
       if (now.state === "stopped" && !now.source) {
-        stop();
+        await stop();
         return "Stopped.";
       }
       if (!now.source) {
-        stop();
+        await stop();
         now.state = "stopped";
         return "Stopped.";
       }
@@ -1844,7 +1926,7 @@ ${describe()}`
     description: "Stop playback entirely.",
     schema: noArgs,
     handler: async () => {
-      stop();
+      await stop();
       let warning = "";
       try {
         if (now.source === "spotify") await pause();
@@ -1899,14 +1981,14 @@ ${describe()}`
   },
   {
     name: "spotify_login",
-    description: "Start Spotify OAuth. Returns a URL to open; then paste the code with spotify_complete_login.",
+    description: "Start Spotify OAuth. Returns a URL to open; then paste the redirect URL with spotify_complete_login.",
     schema: noArgs,
-    handler: () => `Open this URL, approve, then copy the "code" query param from the redirect and call spotify_complete_login:
+    handler: () => `Open this URL and approve. Then copy the redirect URL from the address bar (the page itself won't load) and pass it \u2014 or just its "code" param \u2014 to spotify_complete_login:
 ${loginUrl()}`
   },
   {
     name: "spotify_complete_login",
-    description: "Finish Spotify login by pasting the authorization code from the redirect URL.",
+    description: "Finish Spotify login by pasting the redirect URL, or just its code parameter.",
     schema: { type: "object", properties: { code: { type: "string" } }, required: ["code"] },
     handler: async (a) => {
       await complete(String(a.code));
@@ -2111,6 +2193,34 @@ test("podcast: parseFeed ignores an item cut off by feed truncation", () => {
   const parsed = parseFeed(head);
   assert.strictEqual(parsed.channel, "Big");
   assert.deepStrictEqual(parsed.episodes, [{ title: "New", url: "https://cdn.example.com/2.mp3" }]);
+});
+test("podcast: parseFeed decodes numeric entities exactly once", () => {
+  const parsed = parseFeed(`<rss><channel><title>Caf&#233; &#x26; Co</title>
+    <item><title>What&#8217;s new &amp;lt;live&amp;gt;</title>
+      <enclosure url="https://cdn.example.com/a.mp3?x=1&amp;y=2"/></item></channel></rss>`);
+  assert.strictEqual(parsed.channel, "Caf\xE9 & Co");
+  assert.strictEqual(parsed.episodes[0].title, "What\u2019s new &lt;live&gt;");
+  assert.strictEqual(parsed.episodes[0].url, "https://cdn.example.com/a.mp3?x=1&y=2");
+});
+test("podcast: stepping follows the current episode when the feed gains new ones", () => {
+  const eps = (...titles) => titles.map((title) => ({ title, url: `https://cdn.example.com/${title}.mp3` }));
+  assert.strictEqual(locateEpisode(eps("N", "A", "B", "C"), "B", 1), 2);
+  assert.strictEqual(locateEpisode(eps("X", "B", "Y", "B"), "B", 3), 3);
+  assert.strictEqual(locateEpisode(eps("A", "B"), "gone", 1), 1);
+  assert.strictEqual(locateEpisode(eps("A", "B"), null, 0), 0);
+});
+test("spotify: authorization code is accepted bare or inside the pasted redirect URL", () => {
+  assert.strictEqual(authorizationCode("AQBx-y_z"), "AQBx-y_z");
+  assert.strictEqual(authorizationCode("http://127.0.0.1:8888/callback?code=AQBx-y_z&state=1"), "AQBx-y_z");
+  assert.strictEqual(authorizationCode("code=AQBx-y_z"), "AQBx-y_z");
+  assert.throws(() => authorizationCode("http://127.0.0.1:8888/callback?error=access_denied"), /access_denied/);
+});
+test("spotify: 403 reports Spotify's reason instead of always blaming Premium", () => {
+  assert.match(spotifyErrorMessage(403, JSON.stringify({ error: { status: 403, message: "Player command failed: Premium required", reason: "PREMIUM_REQUIRED" } })), /Premium is required/);
+  const restricted = spotifyErrorMessage(403, JSON.stringify({ error: { status: 403, message: "Player command failed: Restriction violated", reason: "UNKNOWN" } }));
+  assert.match(restricted, /Restriction violated/);
+  assert.doesNotMatch(restricted, /Premium/);
+  assert.match(spotifyErrorMessage(500, "<html>oops</html>"), /Spotify API 500: <html>oops/);
 });
 test("applemusic: escapeAS escapes quotes and backslashes", () => {
   assert.strictEqual(escapeAS(`My "Best" Mix\\2024`), `My \\"Best\\" Mix\\\\2024`);

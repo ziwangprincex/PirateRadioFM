@@ -92,13 +92,29 @@ export function loginUrl(): string {
   return `${AUTH}/authorize?${p}`;
 }
 
+// Users paste the whole redirect URL about as often as the bare code; accept
+// both, and surface a denied consent instead of exchanging garbage. Exported
+// for selfcheck.
+export function authorizationCode(input: string): string {
+  const s = input.trim();
+  let params: URLSearchParams | null = null;
+  if (/^https?:\/\//i.test(s)) { try { params = new URL(s).searchParams; } catch { /* treat as a bare code */ } }
+  else if (/^\??code=/.test(s)) params = new URLSearchParams(s.replace(/^\?/, ""));
+  if (!params) return s;
+  const denied = params.get("error");
+  if (denied) throw new Error(`Spotify login was not approved (${denied}). Run spotify_login again.`);
+  const code = params.get("code");
+  if (!code) throw new Error("No code= parameter in what was pasted. Copy the full redirect URL after approving.");
+  return code;
+}
+
 // Step 2: exchange the pasted code for tokens.
-export async function complete(code: string): Promise<void> {
+export async function complete(pasted: string): Promise<void> {
   const v = now.spotifyVerifier;
   if (!v) throw new Error("Call spotify_login first to start the flow.");
   const body = new URLSearchParams({
     grant_type: "authorization_code",
-    code,
+    code: authorizationCode(pasted),
     redirect_uri: REDIRECT,
     client_id: clientId(),
     code_verifier: v,
@@ -149,19 +165,36 @@ async function api(path: string, init?: RequestInit): Promise<Response> {
     headers: { ...(init?.headers ?? {}), Authorization: `Bearer ${tok}` },
   });
   // Errors carry `.status` so callers can branch (playContext's no-device
-  // recovery keys off 404) without string-matching the message.
-  if (r.status === 404)
-    throw statusError(404, "No active Spotify device found. Open the Spotify app (Premium required) and play something once, then retry — or use spotify_devices.");
-  if (r.status === 403)
-    throw statusError(403, "Spotify refused the command. Premium is required for playback control.");
-  // Anything else that isn't 2xx (500, 502, 429, 400 with a bad body) must
-  // surface as an error — otherwise callers happily parse an empty body and
-  // report "success" or "no playlists found" when the real problem was a 500.
+  // recovery keys off 404) without string-matching the message. Anything that
+  // isn't 2xx (500, 502, 429, 400 with a bad body) must surface as an error —
+  // otherwise callers happily parse an empty body and report "success" or "no
+  // playlists found" when the real problem was a 500.
   if (!r.ok) {
-    const body = await r.text().catch(() => "");
-    throw statusError(r.status, `Spotify API ${r.status}: ${body.slice(0, 200) || r.statusText}`);
+    const body = r.status === 404 ? "" : await r.text().catch(() => "");
+    throw statusError(r.status, spotifyErrorMessage(r.status, body, r.statusText));
   }
   return r;
+}
+
+// Spotify error bodies are {"error":{"status","message","reason"}}. A 403 means
+// "Premium required" OR a momentary restriction (pausing while already paused,
+// a device that disallows volume), so only blame Premium when Spotify does.
+// Exported for selfcheck.
+export function spotifyErrorMessage(status: number, body: string, statusText = ""): string {
+  if (status === 404)
+    return "No active Spotify device found. Open the Spotify app (Premium required) and play something once, then retry — or use spotify_devices.";
+  let message = "", reason = "";
+  try {
+    const error = (JSON.parse(body) as { error?: { message?: unknown; reason?: unknown } }).error;
+    if (typeof error?.message === "string") message = error.message;
+    if (typeof error?.reason === "string") reason = error.reason;
+  } catch { /* not a JSON error body */ }
+  if (status === 403) {
+    return reason === "PREMIUM_REQUIRED" || /premium/i.test(message) || (!message && !reason)
+      ? "Spotify refused the command. Premium is required for playback control."
+      : `Spotify refused the command: ${message || reason}.`;
+  }
+  return `Spotify API ${status}: ${(message || body).slice(0, 200) || statusText}`;
 }
 
 function statusError(status: number, message: string): Error {
@@ -320,7 +353,7 @@ export async function playContext(uriOrName: string): Promise<string> {
   // silence. Only silence local playback once Spotify has committed.
   await playbackEffect(async () => {
     await playWithRecovery(playBody(uri));
-    stopLocal();
+    await stopLocal();
   });
   now.state = "playing";
   now.source = "spotify";

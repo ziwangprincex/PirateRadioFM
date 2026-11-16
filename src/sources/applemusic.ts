@@ -60,7 +60,7 @@ export async function play(target: string): Promise<string> {
     // spotify.playContext): a typo must not end in silence plus an error. Local
     // mpv/ffplay always; Spotify only if it was the active source, since pause()
     // needs login+device.
-    stopLocal();
+    await stopLocal();
     if (now.source === "spotify") {
       try { await spotify.pause(); } catch { /* best effort */ }
     }
