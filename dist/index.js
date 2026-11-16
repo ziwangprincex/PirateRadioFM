@@ -18010,7 +18010,7 @@ function armStdinClose() {
   });
 }
 var server = new Server(
-  { name: "radiohead", version: "0.2.0" },
+  { name: "radiohead", version: "0.2.1" },
   { capabilities: { tools: {} } }
 );
 server.setRequestHandler(ListToolsRequestSchema, async () => {
