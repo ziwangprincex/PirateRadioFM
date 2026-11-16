@@ -776,6 +776,23 @@ async function setPaused(paused) {
   }
   return true;
 }
+async function streamTitle(stationName) {
+  const p = livePlayers().find((e) => e.ipc);
+  if (!p?.ipc) return null;
+  try {
+    return icyTitle(await mpvCommand(p.ipc, ["get_property", "metadata"], 500), stationName);
+  } catch {
+    return null;
+  }
+}
+function icyTitle(metadata, stationName = null) {
+  if (!metadata || typeof metadata !== "object") return null;
+  const value = Object.entries(metadata).find(([key]) => key.toLowerCase() === "icy-title")?.[1];
+  const title = typeof value === "string" ? value.replace(/\s+/g, " ").replace(/^[\s|–—-]+|[\s|–—-]+$/g, "") : "";
+  if (!title) return null;
+  const song = title.toLowerCase(), station = stationName?.trim().toLowerCase() ?? "";
+  return station && (song.includes(station) || station.includes(song)) ? null : title;
+}
 async function setVolume(volume) {
   const players = livePlayers();
   if (players.some((p) => !p.ipc)) return false;
@@ -937,13 +954,13 @@ function loadStateUnlocked() {
   }
   if (!Number.isSafeInteger(now.revision) || now.revision < 0) now.revision = 0;
 }
-function describe() {
+function describe(song = null) {
   if (now.state === "stopped" || !now.source) return "Stopped.";
   const localSource = now.source === "radio" || now.source === "podcast" || now.source === "hoer";
   if (localSource && now.state === "playing" && livePlayerCountUnlocked() === 0) {
     return "Stopped (player exited unexpectedly).";
   }
-  const what = now.source === "radio" ? `${now.genre} radio \u2014 ${now.stationName}` : now.source === "podcast" ? `Podcast ${now.podcastName ?? "(unknown)"} \u2014 ${now.title ?? "(unknown)"}` : now.source === "hoer" ? `H\xD6R Berlin \u2014 ${now.title ?? "(unknown)"}` : now.source === "applemusic" ? `Apple Music \u2014 ${now.title ?? "(unknown)"}` : `Spotify \u2014 ${now.title ?? "(unknown)"}`;
+  const what = now.source === "radio" ? `${now.genre} radio \u2014 ${now.stationName}${song ? ` \u2014 \u266A ${song}` : ""}` : now.source === "podcast" ? `Podcast ${now.podcastName ?? "(unknown)"} \u2014 ${now.title ?? "(unknown)"}` : now.source === "hoer" ? `H\xD6R Berlin \u2014 ${now.title ?? "(unknown)"}` : now.source === "applemusic" ? `Apple Music \u2014 ${now.title ?? "(unknown)"}` : `Spotify \u2014 ${now.title ?? "(unknown)"}`;
   return `${now.state === "paused" ? "Paused" : "Playing"}: ${what} (vol ${now.volume})`;
 }
 
@@ -1941,7 +1958,7 @@ ${describe()}`
   },
   {
     name: "radio_now_playing",
-    description: "Show what is currently playing.",
+    description: "Show what is currently playing, including the song on air for radio stations that publish it.",
     schema: noArgs,
     handler: async () => {
       if (now.source === "spotify") {
@@ -1956,7 +1973,8 @@ ${describe()}`
         } catch {
         }
       }
-      return describe();
+      const song = now.source === "radio" && now.state === "playing" ? await streamTitle(now.stationName) : null;
+      return describe(song);
     }
   },
   {
@@ -2126,6 +2144,17 @@ test("all orphan sweep sites require a session-specific marker, never a host", (
 test("player detect returns a known value", () => {
   const p = playerAvailable();
   assert.ok(p === null || p === "mpv" || p === "ffplay");
+});
+test("player: icyTitle keeps real songs and drops empty or self-announcing titles", () => {
+  assert.strictEqual(icyTitle({ "icy-name": "Groove Salad", "icy-title": "Kick Bong - Just You And Me" }, "SomaFM Groove Salad"), "Kick Bong - Just You And Me");
+  assert.strictEqual(icyTitle({ "ICY-Title": "  Talk Talk -  It's My Life " }, "WFUV 90.7 New York"), "Talk Talk - It's My Life");
+  assert.strictEqual(icyTitle({ "icy-title": "" }, "KEXP 90.3 Seattle"), null);
+  assert.strictEqual(icyTitle({ "icy-title": " - " }, null), null);
+  assert.strictEqual(icyTitle({ "icy-title": "The Current-" }, "The Current 89.3 (Minnesota Public Radio)"), null);
+  assert.strictEqual(icyTitle({ "icy-title": "Radio Swiss Jazz - www.radioswissjazz.ch" }, "Radio Swiss Jazz"), null);
+  assert.strictEqual(icyTitle({ "icy-name": "NTS 1" }, "NTS 1 London"), null);
+  assert.strictEqual(icyTitle("property unavailable", "NTS 1 London"), null);
+  assert.strictEqual(icyTitle(null), null);
 });
 test("tools registry: every slash command maps to a real tool", () => {
   const toolNames = new Set(tools.map((t) => t.name));

@@ -55,6 +55,19 @@ test("player detect returns a known value", () => {
   assert.ok(p === null || p === "mpv" || p === "ffplay");
 });
 
+test("player: icyTitle keeps real songs and drops empty or self-announcing titles", () => {
+  // Shapes observed from the bundled stations through mpv's metadata property.
+  assert.strictEqual(player.icyTitle({ "icy-name": "Groove Salad", "icy-title": "Kick Bong - Just You And Me" }, "SomaFM Groove Salad"), "Kick Bong - Just You And Me");
+  assert.strictEqual(player.icyTitle({ "ICY-Title": "  Talk Talk -  It's My Life " }, "WFUV 90.7 New York"), "Talk Talk - It's My Life");
+  assert.strictEqual(player.icyTitle({ "icy-title": "" }, "KEXP 90.3 Seattle"), null);
+  assert.strictEqual(player.icyTitle({ "icy-title": " - " }, null), null);
+  assert.strictEqual(player.icyTitle({ "icy-title": "The Current-" }, "The Current 89.3 (Minnesota Public Radio)"), null);
+  assert.strictEqual(player.icyTitle({ "icy-title": "Radio Swiss Jazz - www.radioswissjazz.ch" }, "Radio Swiss Jazz"), null);
+  assert.strictEqual(player.icyTitle({ "icy-name": "NTS 1" }, "NTS 1 London"), null);
+  assert.strictEqual(player.icyTitle("property unavailable", "NTS 1 London"), null);
+  assert.strictEqual(player.icyTitle(null), null);
+});
+
 test("tools registry: every slash command maps to a real tool", () => {
   // Catches typos when adding slash commands.
   const toolNames = new Set(tools.map((t) => t.name));

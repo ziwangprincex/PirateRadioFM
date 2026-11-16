@@ -199,7 +199,8 @@ export function saveState(): void {
   withCrossProcessLock(stateLockPath, () => saveStateUnlocked());
 }
 
-export function describe(): string {
+// `song`: the track on air, when the caller could read it from the stream.
+export function describe(song: string | null = null): string {
   if (now.state === "stopped" || !now.source) return "Stopped.";
   // Reconcile with reality for the local-player paths (radio, podcast): if the
   // mpv/ffplay we recorded is dead (crashed, OOM, user-kill), the on-disk state
@@ -212,7 +213,7 @@ export function describe(): string {
   }
   const what =
     now.source === "radio"
-      ? `${now.genre} radio — ${now.stationName}`
+      ? `${now.genre} radio — ${now.stationName}${song ? ` — ♪ ${song}` : ""}`
       : now.source === "podcast"
         ? `Podcast ${now.podcastName ?? "(unknown)"} — ${now.title ?? "(unknown)"}`
         : now.source === "hoer"

@@ -133,7 +133,7 @@ when upgrading. Exit all old sessions before loading the new bundles.
 | `/next` | Next station / channel / track |
 | `/prev` | Previous station / channel / track |
 | `/volume <0-100>` | Set volume |
-| `/now-playing` | Show what's playing |
+| `/now-playing` | Show what's playing — on most radio stations, including the song on air (needs mpv) |
 | `/doctor` | Diagnose playback problems (player, yt-dlp, Spotify, streams) |
 
 `/nts`, `/paradise`, and `/public` have several channels; `/next` cycles through them.

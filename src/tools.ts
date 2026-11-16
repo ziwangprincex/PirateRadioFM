@@ -122,7 +122,7 @@ export const tools: Tool[] = [
   },
   {
     name: "radio_now_playing",
-    description: "Show what is currently playing.",
+    description: "Show what is currently playing, including the song on air for radio stations that publish it.",
     schema: noArgs,
     handler: async () => {
       // For the remote sources, ask the app for the real current track; fall
@@ -133,7 +133,10 @@ export const tools: Tool[] = [
       if (now.source === "applemusic") {
         try { return `Apple Music — ${applemusic.nowPlayingLine()}`; } catch { /* fall back */ }
       }
-      return describe();
+      // Most stations name the song in the stream itself; mpv exposes it.
+      // Not while paused: the last title read would be stale.
+      const song = now.source === "radio" && now.state === "playing" ? await player.streamTitle(now.stationName) : null;
+      return describe(song);
     },
   },
   {

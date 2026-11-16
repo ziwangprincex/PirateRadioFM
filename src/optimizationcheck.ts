@@ -83,7 +83,8 @@ async function withIpc(fn: (path: string, commands: unknown[][]) => Promise<void
       if (message.command[0] === "stall") return;
       if (message.command[0] === "disconnect") { socket.destroy(); return; }
       socket.write(JSON.stringify({ event: "property-change", data: 4 }) + "\n");
-      const reply = JSON.stringify({ request_id: message.request_id, error: message.command[0] === "fail" ? "invalid parameter" : "success", data: true });
+      const data = message.command[1] === "metadata" ? { "icy-name": "Groove Salad", "icy-title": "Kick Bong - Just You And Me" } : true;
+      const reply = JSON.stringify({ request_id: message.request_id, error: message.command[0] === "fail" ? "invalid parameter" : "success", data });
       socket.write(reply.slice(0, 5));
       socket.write(reply.slice(5) + "\n");
     });
@@ -291,6 +292,22 @@ test("stop: the server's own child player is reaped on the event loop, not waite
   assert.ok(reapedDuringStop, "the child must be reaped while stop() waits");
   assert.ok(Date.now() - started < 240, `stop() took ${Date.now() - started}ms — it sat out the kill grace period`);
   assert.equal(livePlayers().length, 0);
+});
+
+test("now playing: shows the song on air from the stream's ICY metadata", async () => {
+  const { runTool } = await import("./tools.js");
+  await withState(() => { now.source = "radio"; now.genre = "chill"; now.stationName = "SomaFM Groove Salad"; now.state = "playing"; now.volume = 80; });
+  await withIpc(async (path) => {
+    addPlayer(process.pid, "local-test", { ipc: path, player: "mpv" });
+    try {
+      assert.equal(await runTool("radio_now_playing"), "Playing: chill radio — SomaFM Groove Salad — ♪ Kick Bong - Just You And Me (vol 80)");
+    } finally { drainAll(); }
+  });
+  // ffplay has no control channel: the station line alone, as before.
+  addPlayer(process.pid, "local-test", { player: "ffplay" });
+  try {
+    assert.equal(await runTool("radio_now_playing"), "Playing: chill radio — SomaFM Groove Salad (vol 80)");
+  } finally { drainAll(); }
 });
 
 test("stop: a failed remote pause is reported but still records the stop", async () => {

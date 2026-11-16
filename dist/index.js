@@ -16630,6 +16630,23 @@ async function setPaused(paused) {
   }
   return true;
 }
+async function streamTitle(stationName) {
+  const p = livePlayers().find((e) => e.ipc);
+  if (!p?.ipc) return null;
+  try {
+    return icyTitle(await mpvCommand(p.ipc, ["get_property", "metadata"], 500), stationName);
+  } catch {
+    return null;
+  }
+}
+function icyTitle(metadata, stationName = null) {
+  if (!metadata || typeof metadata !== "object") return null;
+  const value = Object.entries(metadata).find(([key]) => key.toLowerCase() === "icy-title")?.[1];
+  const title = typeof value === "string" ? value.replace(/\s+/g, " ").replace(/^[\s|–—-]+|[\s|–—-]+$/g, "") : "";
+  if (!title) return null;
+  const song = title.toLowerCase(), station = stationName?.trim().toLowerCase() ?? "";
+  return station && (song.includes(station) || station.includes(song)) ? null : title;
+}
 async function setVolume(volume) {
   const players = livePlayers();
   if (players.some((p) => !p.ipc)) return false;
@@ -16836,13 +16853,13 @@ function writeSnapshot(value) {
 function saveState() {
   withCrossProcessLock(stateLockPath, () => saveStateUnlocked());
 }
-function describe2() {
+function describe2(song = null) {
   if (now.state === "stopped" || !now.source) return "Stopped.";
   const localSource = now.source === "radio" || now.source === "podcast" || now.source === "hoer";
   if (localSource && now.state === "playing" && livePlayerCountUnlocked() === 0) {
     return "Stopped (player exited unexpectedly).";
   }
-  const what = now.source === "radio" ? `${now.genre} radio \u2014 ${now.stationName}` : now.source === "podcast" ? `Podcast ${now.podcastName ?? "(unknown)"} \u2014 ${now.title ?? "(unknown)"}` : now.source === "hoer" ? `H\xD6R Berlin \u2014 ${now.title ?? "(unknown)"}` : now.source === "applemusic" ? `Apple Music \u2014 ${now.title ?? "(unknown)"}` : `Spotify \u2014 ${now.title ?? "(unknown)"}`;
+  const what = now.source === "radio" ? `${now.genre} radio \u2014 ${now.stationName}${song ? ` \u2014 \u266A ${song}` : ""}` : now.source === "podcast" ? `Podcast ${now.podcastName ?? "(unknown)"} \u2014 ${now.title ?? "(unknown)"}` : now.source === "hoer" ? `H\xD6R Berlin \u2014 ${now.title ?? "(unknown)"}` : now.source === "applemusic" ? `Apple Music \u2014 ${now.title ?? "(unknown)"}` : `Spotify \u2014 ${now.title ?? "(unknown)"}`;
   return `${now.state === "paused" ? "Paused" : "Playing"}: ${what} (vol ${now.volume})`;
 }
 
@@ -17807,7 +17824,7 @@ ${describe2()}`
   },
   {
     name: "radio_now_playing",
-    description: "Show what is currently playing.",
+    description: "Show what is currently playing, including the song on air for radio stations that publish it.",
     schema: noArgs,
     handler: async () => {
       if (now.source === "spotify") {
@@ -17822,7 +17839,8 @@ ${describe2()}`
         } catch {
         }
       }
-      return describe2();
+      const song = now.source === "radio" && now.state === "playing" ? await streamTitle(now.stationName) : null;
+      return describe2(song);
     }
   },
   {
@@ -18010,7 +18028,7 @@ function armStdinClose() {
   });
 }
 var server = new Server(
-  { name: "radiohead", version: "0.2.1" },
+  { name: "radiohead", version: "0.2.2" },
   { capabilities: { tools: {} } }
 );
 server.setRequestHandler(ListToolsRequestSchema, async () => {

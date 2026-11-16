@@ -139,6 +139,30 @@ export async function setPaused(paused: boolean): Promise<boolean> {
   }
   return true;
 }
+
+// The song on air, from the stream's in-band ICY metadata — which arrives a few
+// seconds after the stream starts. mpv only: ffplay has no control channel.
+// Read-only and best effort, so any IPC failure just means "no song".
+export async function streamTitle(stationName: string | null): Promise<string | null> {
+  const p = livePlayers().find((e) => e.ipc);
+  if (!p?.ipc) return null;
+  try { return icyTitle(await mpvCommand(p.ipc, ["get_property", "metadata"], 500), stationName); }
+  catch { return null; }
+}
+
+// mpv's media-title is no use here: without a song it falls back to the URL's
+// file name ("mp3_128"). Stations without track data send "", "-" or a
+// dangling "Station-", and some announce themselves between songs ("Radio
+// Swiss Jazz - www.radioswissjazz.ch"); none of that is a song. Exported for
+// selfcheck.
+export function icyTitle(metadata: unknown, stationName: string | null = null): string | null {
+  if (!metadata || typeof metadata !== "object") return null;
+  const value = Object.entries(metadata).find(([key]) => key.toLowerCase() === "icy-title")?.[1];
+  const title = typeof value === "string" ? value.replace(/\s+/g, " ").replace(/^[\s|–—-]+|[\s|–—-]+$/g, "") : "";
+  if (!title) return null;
+  const song = title.toLowerCase(), station = stationName?.trim().toLowerCase() ?? "";
+  return station && (song.includes(station) || station.includes(song)) ? null : title;
+}
 // false = a live player has no IPC channel (ffplay): the caller keeps the level
 // for the next play instead. mpv IPC failures still throw.
 export async function setVolume(volume: number): Promise<boolean> {
