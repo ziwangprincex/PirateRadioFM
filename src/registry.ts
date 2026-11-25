@@ -30,6 +30,8 @@ export interface ProcEntry {
   ipc?: string;
   player?: "mpv" | "ffplay";
   host?: string;         // stream host, for diagnostics
+  url?: string;          // stream URL (already visible in the player's argv)
+  noStreamTitle?: true;  // the station's metadata never names the song
 }
 interface Registry {
   players: ProcEntry[];
@@ -124,6 +126,9 @@ export function removePlayer(pid: number): void {
 }
 export function removeWatchdog(pid: number): void {
   withLock((r) => { r.watchdogs = r.watchdogs.filter((e) => e.pid !== pid); });
+}
+export function markNoStreamTitle(pid: number): void {
+  withLock((r) => { for (const e of r.players) if (e.pid === pid) e.noStreamTitle = true; });
 }
 
 export function owned(entry: ProcEntry, id = sessionId()): boolean {

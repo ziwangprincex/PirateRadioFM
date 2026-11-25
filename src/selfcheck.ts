@@ -66,6 +66,20 @@ test("player: icyTitle keeps real songs and drops empty or self-announcing title
   assert.strictEqual(player.icyTitle({ "icy-name": "NTS 1" }, "NTS 1 London"), null);
   assert.strictEqual(player.icyTitle("property unavailable", "NTS 1 London"), null);
   assert.strictEqual(player.icyTitle(null), null);
+  // Venice Classic appends its own promo to every title.
+  assert.strictEqual(player.icyTitle({ "icy-title": "Mozart - Quartetto KV285 (The Nash Ensemble)  {+info: veniceclassicradio.eu}" }, "Venice Classic Radio"), "Mozart - Quartetto KV285 (The Nash Ensemble)");
+});
+
+test("player: parseIcyBlock reads StreamTitle from a raw ICY metadata block", () => {
+  const block = (s: string, encoding: BufferEncoding = "utf8") => Buffer.from(s, encoding);
+  assert.strictEqual(player.parseIcyBlock(block("StreamTitle='Patty Griffin - Ohio';StreamUrl='http://img.example/1.jpg';\0\0\0")), "Patty Griffin - Ohio");
+  // Apostrophes inside the title must not end it early.
+  assert.strictEqual(player.parseIcyBlock(block("StreamTitle='Guns N' Roses - Don't Cry';StreamUrl='';")), "Guns N' Roses - Don't Cry");
+  assert.strictEqual(player.parseIcyBlock(block("StreamTitle='Sigur Rós - Hoppípolla';")), "Sigur Rós - Hoppípolla");
+  // Older servers send Latin-1, which is not valid UTF-8.
+  assert.strictEqual(player.parseIcyBlock(block("StreamTitle='Sigur Rós - Hoppípolla';", "latin1")), "Sigur Rós - Hoppípolla");
+  assert.strictEqual(player.parseIcyBlock(block("StreamTitle='';")), "");
+  assert.strictEqual(player.parseIcyBlock(block("StreamUrl='x';")), null);
 });
 
 test("tools registry: every slash command maps to a real tool", () => {

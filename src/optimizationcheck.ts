@@ -69,6 +69,8 @@ test("HTTP: caller cancellation and total operation budget abort pending reads",
   });
 });
 
+// What the fake mpv reports as its `metadata` property.
+let ipcMetadata: Record<string, string> = { "icy-name": "Groove Salad", "icy-title": "Kick Bong - Just You And Me" };
 async function withIpc(fn: (path: string, commands: unknown[][]) => Promise<void>): Promise<void> {
   const path = process.platform === "win32" ? `\\\\.\\pipe\\pr-test-${randomUUID()}` : join(home, "mpv.sock");
   const commands: unknown[][] = [];
@@ -83,7 +85,7 @@ async function withIpc(fn: (path: string, commands: unknown[][]) => Promise<void
       if (message.command[0] === "stall") return;
       if (message.command[0] === "disconnect") { socket.destroy(); return; }
       socket.write(JSON.stringify({ event: "property-change", data: 4 }) + "\n");
-      const data = message.command[1] === "metadata" ? { "icy-name": "Groove Salad", "icy-title": "Kick Bong - Just You And Me" } : true;
+      const data = message.command[1] === "metadata" ? ipcMetadata : true;
       const reply = JSON.stringify({ request_id: message.request_id, error: message.command[0] === "fail" ? "invalid parameter" : "success", data });
       socket.write(reply.slice(0, 5));
       socket.write(reply.slice(5) + "\n");
@@ -308,6 +310,62 @@ test("now playing: shows the song on air from the stream's ICY metadata", async 
   try {
     assert.equal(await runTool("radio_now_playing"), "Playing: chill radio — SomaFM Groove Salad (vol 80)");
   } finally { drainAll(); }
+});
+
+test("now playing: reads the title from the station when mpv missed it, or under ffplay", async () => {
+  const { runTool } = await import("./tools.js");
+  // A minimal ICY stream: 16 audio bytes, a metadata block, then more audio
+  // that never ends — like a real station, the reader must stop by itself.
+  let hits = 0;
+  const station = httpServer((req, res) => {
+    hits++;
+    // SomaFM, like many stations, refuses Node's default "node" User-Agent.
+    if (!String(req.headers["user-agent"]).startsWith("PirateRadioFM")) { res.writeHead(403); res.end(); return; }
+    if (req.headers["icy-metadata"] !== "1") { res.writeHead(400); res.end(); return; }
+    // /silent is like WWOZ: ICY metadata blocks that never carry a title.
+    const meta = Buffer.from(req.url === "/silent" ? "" : "StreamTitle='Patty Griffin - Ohio';StreamUrl='';");
+    const padded = Buffer.alloc(Math.ceil(meta.length / 16) * 16); meta.copy(padded);
+    res.writeHead(200, { "content-type": "audio/mpeg", "icy-metaint": "16" });
+    res.write(Buffer.concat([Buffer.alloc(16), Buffer.from([padded.length / 16]), padded]));
+    const more = setInterval(() => res.write(Buffer.alloc(16)), 20);
+    res.on("close", () => clearInterval(more));
+  });
+  station.listen(0, "127.0.0.1");
+  await once(station, "listening");
+  const url = `http://127.0.0.1:${(station.address() as { port: number }).port}/stream`;
+  const line = "Playing: paradise radio — Radio Paradise Main Mix — ♪ Patty Griffin - Ohio (vol 80)";
+  try {
+    await withState(() => { now.source = "radio"; now.genre = "paradise"; now.stationName = "Radio Paradise Main Mix"; now.state = "playing"; now.volume = 80; });
+    // mpv connected but never surfaced the station's one-per-song title block.
+    ipcMetadata = { "icy-name": "Radio Paradise" };
+    await withIpc(async (path) => {
+      addPlayer(process.pid, "local-test", { ipc: path, player: "mpv", url });
+      try { assert.equal(await runTool("radio_now_playing"), line); } finally { drainAll(); }
+    });
+    // ffplay has no control channel at all.
+    addPlayer(process.pid, "local-test", { player: "ffplay", url });
+    try { assert.equal(await runTool("radio_now_playing"), line); } finally { drainAll(); }
+    assert.equal(hits, 2);
+    // A station that publishes an empty title is believed: no extra connection.
+    ipcMetadata = { "icy-name": "KEXP", "icy-title": "" };
+    await withIpc(async (path) => {
+      addPlayer(process.pid, "local-test", { ipc: path, player: "mpv", url });
+      try { assert.equal(await runTool("radio_now_playing"), "Playing: paradise radio — Radio Paradise Main Mix (vol 80)"); } finally { drainAll(); }
+    });
+    assert.equal(hits, 2);
+    // A station that sends no titles at all is asked once per player, not on
+    // every call: each request is a new connection, slow on a distant station.
+    const silent = url.replace("/stream", "/silent");
+    addPlayer(process.pid, "local-test", { player: "ffplay", url: silent });
+    try {
+      for (let i = 0; i < 2; i++) assert.equal(await runTool("radio_now_playing"), "Playing: paradise radio — Radio Paradise Main Mix (vol 80)");
+    } finally { drainAll(); }
+    assert.equal(hits, 3);
+  } finally {
+    ipcMetadata = { "icy-name": "Groove Salad", "icy-title": "Kick Bong - Just You And Me" };
+    station.closeAllConnections();
+    await new Promise<void>((resolve) => station.close(() => resolve()));
+  }
 });
 
 test("stop: a failed remote pause is reported but still records the stop", async () => {

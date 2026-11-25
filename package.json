@@ -1,6 +1,6 @@
 {
   "name": "pirate-radio",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Radio, podcasts, Spotify, and Apple Music for CLI coding agents.",
   "type": "module",
   "engines": {
@@ -18,7 +18,7 @@
     "check:lifecycle": "node build.mjs && node --test .test-dist/lifecycle/lifecyclecheck.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.32.1"
+    "@modelcontextprotocol/sdk": "^1.32.2"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

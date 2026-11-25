@@ -597,6 +597,11 @@ function removeWatchdog(pid) {
     r.watchdogs = r.watchdogs.filter((e) => e.pid !== pid);
   });
 }
+function markNoStreamTitle(pid) {
+  withLock((r) => {
+    for (const e of r.players) if (e.pid === pid) e.noStreamTitle = true;
+  });
+}
 function owned(entry, id = sessionId()) {
   return (entry.sessionId ?? "legacy") === id;
 }
@@ -739,7 +744,7 @@ async function play(url, volume) {
       host = new URL(url).host;
     } catch {
     }
-    addPlayer(pid, host, { ipc, player });
+    addPlayer(pid, host, { ipc, player, url });
     child.on("exit", () => {
       try {
         removePlayer(pid);
@@ -782,21 +787,74 @@ async function setPaused(paused) {
   return true;
 }
 async function streamTitle(stationName) {
-  const p = livePlayers().find((e) => e.ipc);
-  if (!p?.ipc) return null;
-  try {
-    return icyTitle(await mpvCommand(p.ipc, ["get_property", "metadata"], 500), stationName);
-  } catch {
-    return null;
+  const p = livePlayers()[0];
+  if (!p) return null;
+  if (p.ipc) {
+    try {
+      const metadata = await mpvCommand(p.ipc, ["get_property", "metadata"], 500);
+      if (icyTitleKey(metadata)) return icyTitle(metadata, stationName);
+    } catch {
+    }
   }
+  if (!p.url || p.noStreamTitle) return null;
+  const title = await fetchIcyTitle(p.url);
+  if (title === false) {
+    try {
+      markNoStreamTitle(p.pid);
+    } catch {
+    }
+  }
+  return title ? icyTitle({ "icy-title": title }, stationName) : null;
+}
+function icyTitleKey(metadata) {
+  return metadata && typeof metadata === "object" ? Object.keys(metadata).find((key) => key.toLowerCase() === "icy-title") : void 0;
 }
 function icyTitle(metadata, stationName = null) {
-  if (!metadata || typeof metadata !== "object") return null;
-  const value = Object.entries(metadata).find(([key]) => key.toLowerCase() === "icy-title")?.[1];
-  const title = typeof value === "string" ? value.replace(/\s+/g, " ").replace(/^[\s|–—-]+|[\s|–—-]+$/g, "") : "";
+  const key = icyTitleKey(metadata);
+  const value = key ? metadata[key] : void 0;
+  const title = typeof value === "string" ? value.replace(/\s+/g, " ").replace(/\s*\{[^{}]*\}$/, "").replace(/^[\s|–—-]+|[\s|–—-]+$/g, "") : "";
   if (!title) return null;
   const song = title.toLowerCase(), station = stationName?.trim().toLowerCase() ?? "";
   return station && (song.includes(station) || station.includes(song)) ? null : title;
+}
+var ICY_TIMEOUT_MS = 3e3;
+var ICY_MAX_METAINT = 256 * 1024;
+async function fetchIcyTitle(url) {
+  const ac = new AbortController();
+  const parent = operationSignal();
+  const abort = () => ac.abort();
+  parent?.addEventListener("abort", abort, { once: true });
+  const timer = setTimeout(abort, ICY_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { headers: { "Icy-MetaData": "1", "User-Agent": "PirateRadioFM" }, redirect: "follow", signal: ac.signal });
+    if (!response.ok) return null;
+    if (!response.headers.has("icy-metaint")) return false;
+    const metaint = Number(response.headers.get("icy-metaint"));
+    const reader = response.body?.getReader();
+    if (!reader || !Number.isSafeInteger(metaint) || metaint <= 0 || metaint > ICY_MAX_METAINT) return null;
+    let data = Buffer.alloc(0);
+    while (data.length <= metaint || data.length < metaint + 1 + data[metaint] * 16) {
+      const part = await reader.read();
+      if (part.done) return null;
+      data = Buffer.concat([data, part.value]);
+    }
+    return parseIcyBlock(data.subarray(metaint + 1, metaint + 1 + data[metaint] * 16)) ?? false;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+    parent?.removeEventListener("abort", abort);
+    ac.abort();
+  }
+}
+function parseIcyBlock(block) {
+  let text;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(block);
+  } catch {
+    text = block.toString("latin1");
+  }
+  return text.replace(/\0+$/, "").match(/StreamTitle='([\s\S]*?)';(?=[A-Za-z]+=|$)/)?.[1] ?? null;
 }
 async function setVolume(volume) {
   const players = livePlayers();

@@ -6,9 +6,9 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { readAnchor, anchorAlive, sessionId, playerMarker, hostProcess, sessionEnvironment } from "./session.js";
 import { killPid, killPidAsync, killSameProcess, killSameProcessAsync, sameProcess, findOrphanPlayers, procStartToken } from "./proc.js";
-import { addPlayer, addWatchdog, drainAll, removePlayer, removeWatchdog, livePlayers } from "./registry.js";
+import { addPlayer, addWatchdog, drainAll, removePlayer, removeWatchdog, livePlayers, markNoStreamTitle } from "./registry.js";
 import { mpvCommand } from "./ipc.js";
-import { checkCancelled, wait } from "./http.js";
+import { checkCancelled, operationSignal, wait } from "./http.js";
 
 type Player = "mpv" | "ffplay";
 
@@ -105,7 +105,7 @@ export async function play(url: string, volume: number): Promise<void> {
     if (!pid) throw new Error("Audio player did not start");
     let host: string | undefined;
     try { host = new URL(url).host; } catch {}
-    addPlayer(pid, host, { ipc, player });
+    addPlayer(pid, host, { ipc, player, url });
     child.on("exit", () => { try { removePlayer(pid); } catch {} });
     if (ipc) {
       // mpv opens its socket within tens of ms; a coarse retry interval would
@@ -140,29 +140,104 @@ export async function setPaused(paused: boolean): Promise<boolean> {
   return true;
 }
 
-// The song on air, from the stream's in-band ICY metadata — which arrives a few
-// seconds after the stream starts. mpv only: ffplay has no control channel.
-// Read-only and best effort, so any IPC failure just means "no song".
+// The song on air, from the stream's in-band ICY metadata. mpv exposes what it
+// has seen, but it sometimes misses a station's first metadata block — and
+// stations like Radio Paradise send the title only once per song, so the miss
+// lasts until the next song. Then (and under ffplay, which has no control
+// channel) ask the station directly. Best effort: any failure just means "no
+// song".
 export async function streamTitle(stationName: string | null): Promise<string | null> {
-  const p = livePlayers().find((e) => e.ipc);
-  if (!p?.ipc) return null;
-  try { return icyTitle(await mpvCommand(p.ipc, ["get_property", "metadata"], 500), stationName); }
-  catch { return null; }
+  const p = livePlayers()[0];
+  if (!p) return null;
+  if (p.ipc) {
+    try {
+      const metadata = await mpvCommand(p.ipc, ["get_property", "metadata"], 500);
+      // An icy-title key, even empty, means mpv read the station's metadata;
+      // a station that publishes no song (KEXP sends "") needn't be asked.
+      if (icyTitleKey(metadata)) return icyTitle(metadata, stationName);
+    } catch { /* not connected yet; ask the station */ }
+  }
+  if (!p.url || p.noStreamTitle) return null;
+  const title = await fetchIcyTitle(p.url);
+  // Each request is a fresh connection — seconds to a distant station — so
+  // don't repeat it on every call for a station that never names its songs.
+  if (title === false) { try { markNoStreamTitle(p.pid); } catch { /* retry next time */ } }
+  return title ? icyTitle({ "icy-title": title }, stationName) : null;
+}
+
+function icyTitleKey(metadata: unknown): string | undefined {
+  return metadata && typeof metadata === "object"
+    ? Object.keys(metadata).find((key) => key.toLowerCase() === "icy-title")
+    : undefined;
 }
 
 // mpv's media-title is no use here: without a song it falls back to the URL's
 // file name ("mp3_128"). Stations without track data send "", "-" or a
 // dangling "Station-", and some announce themselves between songs ("Radio
-// Swiss Jazz - www.radioswissjazz.ch"); none of that is a song. Exported for
+// Swiss Jazz - www.radioswissjazz.ch"); none of that is a song. Venice Classic
+// appends "{+info: veniceclassicradio.eu}" to every title. Exported for
 // selfcheck.
 export function icyTitle(metadata: unknown, stationName: string | null = null): string | null {
-  if (!metadata || typeof metadata !== "object") return null;
-  const value = Object.entries(metadata).find(([key]) => key.toLowerCase() === "icy-title")?.[1];
-  const title = typeof value === "string" ? value.replace(/\s+/g, " ").replace(/^[\s|–—-]+|[\s|–—-]+$/g, "") : "";
+  const key = icyTitleKey(metadata);
+  const value = key ? (metadata as Record<string, unknown>)[key] : undefined;
+  const title = typeof value === "string"
+    ? value.replace(/\s+/g, " ").replace(/\s*\{[^{}]*\}$/, "").replace(/^[\s|–—-]+|[\s|–—-]+$/g, "")
+    : "";
   if (!title) return null;
   const song = title.toLowerCase(), station = stationName?.trim().toLowerCase() ?? "";
   return station && (song.includes(station) || station.includes(song)) ? null : title;
 }
+
+// One short-lived connection, the way stream players request metadata: the
+// first block follows the first icy-metaint audio bytes (8-45 KB, which
+// stations burst on connect), and it carries the current song. Identify as a
+// player: SomaFM, among others, refuses Node's default "node" User-Agent.
+// Resolves to the title (possibly ""), false when the station's response shows
+// it sends no titles at all (no ICY metadata, or a block without StreamTitle),
+// and null when it couldn't tell (timeout, refusal, network). Exported for
+// diagnostics.
+const ICY_TIMEOUT_MS = 3000;
+const ICY_MAX_METAINT = 256 * 1024;
+export async function fetchIcyTitle(url: string): Promise<string | false | null> {
+  const ac = new AbortController();
+  const parent = operationSignal();
+  const abort = () => ac.abort();
+  parent?.addEventListener("abort", abort, { once: true });
+  const timer = setTimeout(abort, ICY_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { headers: { "Icy-MetaData": "1", "User-Agent": "PirateRadioFM" }, redirect: "follow", signal: ac.signal });
+    if (!response.ok) return null;
+    if (!response.headers.has("icy-metaint")) return false;
+    const metaint = Number(response.headers.get("icy-metaint"));
+    const reader = response.body?.getReader();
+    if (!reader || !Number.isSafeInteger(metaint) || metaint <= 0 || metaint > ICY_MAX_METAINT) return null;
+    let data = Buffer.alloc(0);
+    // The length byte (x16) follows the audio; read until the block is complete.
+    while (data.length <= metaint || data.length < metaint + 1 + data[metaint] * 16) {
+      const part = await reader.read();
+      if (part.done) return null;
+      data = Buffer.concat([data, part.value]);
+    }
+    return parseIcyBlock(data.subarray(metaint + 1, metaint + 1 + data[metaint] * 16)) ?? false;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+    parent?.removeEventListener("abort", abort);
+    ac.abort(); // ends the endless audio body
+  }
+}
+
+// `StreamTitle='Artist - Song';StreamUrl='…';`, NUL-padded. Titles may contain
+// apostrophes, so a title ends only at `';` followed by the next key or the
+// end. Older servers send Latin-1. Exported for selfcheck.
+export function parseIcyBlock(block: Buffer): string | null {
+  let text: string;
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(block); }
+  catch { text = block.toString("latin1"); }
+  return text.replace(/\0+$/, "").match(/StreamTitle='([\s\S]*?)';(?=[A-Za-z]+=|$)/)?.[1] ?? null;
+}
+
 // false = a live player has no IPC channel (ffplay): the caller keeps the level
 // for the next play instead. mpv IPC failures still throw.
 export async function setVolume(volume: number): Promise<boolean> {
